@@ -112,7 +112,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         return Task.Run(async () =>
         {
             var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-            var pendingChunks = new Task<PrefetchedChunk>[chunkUrls.Count];
+            var pendingChunks = new Task<PrefetchedChunk>?[chunkUrls.Count];
 
             try
             {
@@ -126,22 +126,41 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
 
                 for (int i = 0; i < pendingChunks.Length; i++)
                 {
-                    var chunk = await pendingChunks[i].ConfigureAwait(false);
+                    var chunk = await pendingChunks[i]!.ConfigureAwait(false);
                     await channel.Writer.WriteAsync(chunk, cts.Token).ConfigureAwait(false);
+                    pendingChunks[i] = null; // handed off; the consumer now owns disposal
                 }
+
+                channel.Writer.TryComplete();
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                cts.Cancel();
+                channel.Writer.TryComplete();
+            }
             catch (Exception ex)
             {
+                // Stop the sibling downloads promptly rather than leaving them running
+                // orphaned, and surface the failure to the consumer.
+                cts.Cancel();
                 channel.Writer.TryComplete(ex);
-                return;
             }
             finally
             {
+                // Settle any downloads not handed to the consumer (siblings still in flight
+                // after a failure/cancellation), disposing the buffers they produced so they
+                // don't leak and their exceptions don't go unobserved. Only after every
+                // download has completed is it safe to dispose the semaphore -- doing so
+                // earlier would race the in-flight Release() calls.
+                foreach (var pending in pendingChunks)
+                {
+                    if (pending is null) continue;
+                    try { (await pending.ConfigureAwait(false)).Stream.Dispose(); }
+                    catch { /* cancelled or failed download -- nothing to dispose */ }
+                }
+
                 semaphore.Dispose();
             }
-
-            channel.Writer.TryComplete();
         });
     }
 

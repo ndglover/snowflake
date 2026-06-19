@@ -97,6 +97,11 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     {
         var handler = new HttpClientHandler();
 
+        // Allow enough concurrent connections for parallel chunk prefetching. The
+        // net8.0 default is effectively unbounded, but set it explicitly so the
+        // result-chunk downloaders aren't throttled (and to be safe under any host).
+        handler.MaxConnectionsPerServer = 32;
+
         if (network.SslSkipVerify)
         {
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;

@@ -47,7 +47,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         Dictionary<string, string>? chunkHeaders,
         string? qrmk,
         CancellationToken cancellationToken,
-        int prefetchConcurrency = 4)
+        int prefetchConcurrency = 10)
     {
         var chunkUrls = (chunks ?? []).Select(c => c.Url).Where(u => !string.IsNullOrWhiteSpace(u)).ToList();
 
@@ -82,9 +82,19 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
             FullMode = BoundedChannelFullMode.Wait
         });
 
-        var prefetchTask = chunkUrls.Count > 0
-            ? StartPrefetchAsync(apiClient, authToken, chunkHeaders, qrmk, chunkUrls, channel, cts, prefetchConcurrency)
-            : Task.CompletedTask;
+        Task prefetchTask;
+        if (chunkUrls.Count > 0)
+        {
+            prefetchTask = StartPrefetchAsync(apiClient, authToken, chunkHeaders, qrmk, chunkUrls, channel, cts, prefetchConcurrency);
+        }
+        else
+        {
+            // No external chunks (the whole result is inline in rowsetBase64). Complete the
+            // channel now so that, once the inline batch is consumed, ReadNextRecordBatchAsync's
+            // WaitToReadAsync returns false instead of blocking forever waiting for a writer.
+            channel.Writer.TryComplete();
+            prefetchTask = Task.CompletedTask;
+        }
 
         return new ChunkedArrowArrayStream(schema, firstReader, firstStream, channel, cts, prefetchTask);
     }
@@ -146,8 +156,16 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
     {
         try
         {
-            var stream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
-            return new PrefetchedChunk(stream);
+            // GetArrowStreamAsync returns as soon as the HTTP headers arrive (and only
+            // wraps the live network/gzip stream). Fully buffer the chunk here so the
+            // expensive part -- the body transfer + decompression -- happens in parallel
+            // across the prefetch workers, not serially on the consumer thread. The
+            // consumer then just does CPU-bound Arrow decode from memory.
+            using var netStream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
+            var buffer = new MemoryStream();
+            await netStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            buffer.Position = 0;
+            return new PrefetchedChunk(buffer);
         }
         finally
         {

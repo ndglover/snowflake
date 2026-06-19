@@ -1,75 +1,42 @@
-/*
-* Copyright (c) 2025 ADBC Drivers Contributors
-*
-* This file has been modified from its original version, which is
-* under the Apache License:
-*
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Ipc = Apache.Arrow.Ipc;
 
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.Query;
 
 internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
 {
-    private readonly IRestApiClient _apiClient;
-    private readonly AuthenticationToken _authToken;
-    private readonly Dictionary<string, string>? _chunkHeaders;
-    private readonly string? _qrmk;
-    private readonly Queue<string> _chunkUrls;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private Stream _currentStream;
-    private Ipc.ArrowStreamReader _currentReader;
+    private readonly Channel<PrefetchedChunk> _channel;
+    private readonly CancellationTokenSource _cts;
+    private readonly Task _prefetchTask;
+    private Ipc.ArrowStreamReader? _currentReader;
+    private Stream? _currentStream;
     private bool _disposed;
 
-    private ChunkedArrowArrayStream(
-        IRestApiClient apiClient,
-        AuthenticationToken authToken,
-        Dictionary<string, string>? chunkHeaders,
-        string? qrmk,
-        Queue<string> chunkUrls,
-        Stream currentStream,
-        Ipc.ArrowStreamReader currentReader)
-    {
-        ArgumentNullException.ThrowIfNull(apiClient);
-        ArgumentNullException.ThrowIfNull(authToken);
-        ArgumentNullException.ThrowIfNull(chunkUrls);
-        ArgumentNullException.ThrowIfNull(currentStream);
-        ArgumentNullException.ThrowIfNull(currentReader);
+    public Schema Schema { get; }
 
-        _apiClient = apiClient;
-        _authToken = authToken;
-        _chunkHeaders = chunkHeaders;
-        _qrmk = qrmk;
-        _chunkUrls = chunkUrls;
-        _currentStream = currentStream;
-        _currentReader = currentReader;
+    private ChunkedArrowArrayStream(
+        Schema schema,
+        Ipc.ArrowStreamReader firstReader,
+        Stream firstStream,
+        Channel<PrefetchedChunk> channel,
+        CancellationTokenSource cts,
+        Task prefetchTask)
+    {
+        Schema = schema;
+        _currentReader = firstReader;
+        _currentStream = firstStream;
+        _channel = channel;
+        _cts = cts;
+        _prefetchTask = prefetchTask;
     }
 
     public static async Task<ChunkedArrowArrayStream> CreateAsync(
@@ -79,103 +46,158 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         List<ChunkInfo>? chunks,
         Dictionary<string, string>? chunkHeaders,
         string? qrmk,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int prefetchConcurrency = 4)
     {
-        ArgumentNullException.ThrowIfNull(apiClient);
-        ArgumentNullException.ThrowIfNull(authToken);
+        var chunkUrls = (chunks ?? []).Select(c => c.Url).Where(u => !string.IsNullOrWhiteSpace(u)).ToList();
 
-        var chunkUrls = new Queue<string>((chunks ?? []).Select(c => c.Url).Where(u => !string.IsNullOrWhiteSpace(u)));
-
-        Stream stream;
-        Ipc.ArrowStreamReader reader;
+        Stream firstStream;
+        Ipc.ArrowStreamReader firstReader;
 
         if (!string.IsNullOrEmpty(rowSetBase64))
         {
             var arrowBytes = Convert.FromBase64String(rowSetBase64);
-            stream = new MemoryStream(arrowBytes);
-            reader = new Ipc.ArrowStreamReader(stream);
+            firstStream = new MemoryStream(arrowBytes);
+            firstReader = new Ipc.ArrowStreamReader(firstStream);
         }
         else if (chunkUrls.Count > 0)
         {
-            var url = chunkUrls.Dequeue();
-            stream = await apiClient.GetArrowStreamAsync(
-                url,
-                authToken,
-                chunkHeaders,
-                qrmk,
-                cancellationToken).ConfigureAwait(false);
-            reader = new Ipc.ArrowStreamReader(stream);
+            var url = chunkUrls[0];
+            chunkUrls.RemoveAt(0);
+            firstStream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
+            firstReader = new Ipc.ArrowStreamReader(firstStream);
         }
         else
         {
             throw new InvalidOperationException("Arrow result format was requested, but neither rowsetBase64 nor chunks were present.");
         }
 
-        return new ChunkedArrowArrayStream(
-            apiClient,
-            authToken,
-            chunkHeaders,
-            qrmk,
-            chunkUrls,
-            stream,
-            reader);
+        var schema = firstReader.Schema;
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var bufferSize = Math.Min(chunkUrls.Count, prefetchConcurrency);
+        var channel = Channel.CreateBounded<PrefetchedChunk>(new BoundedChannelOptions(Math.Max(bufferSize, 1))
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait
+        });
+
+        var prefetchTask = chunkUrls.Count > 0
+            ? StartPrefetchAsync(apiClient, authToken, chunkHeaders, qrmk, chunkUrls, channel, cts, prefetchConcurrency)
+            : Task.CompletedTask;
+
+        return new ChunkedArrowArrayStream(schema, firstReader, firstStream, channel, cts, prefetchTask);
     }
 
-    public Schema Schema => _currentReader.Schema;
-
-    public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+    private static Task StartPrefetchAsync(
+        IRestApiClient apiClient,
+        AuthenticationToken authToken,
+        Dictionary<string, string>? chunkHeaders,
+        string? qrmk,
+        List<string> chunkUrls,
+        Channel<PrefetchedChunk> channel,
+        CancellationTokenSource cts,
+        int maxConcurrency)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return Task.Run(async () =>
+        {
+            var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+            var pendingChunks = new Task<PrefetchedChunk>[chunkUrls.Count];
+
+            try
+            {
+                for (int i = 0; i < chunkUrls.Count; i++)
+                {
+                    cts.Token.ThrowIfCancellationRequested();
+                    await semaphore.WaitAsync(cts.Token).ConfigureAwait(false);
+                    var url = chunkUrls[i];
+                    pendingChunks[i] = DownloadChunkAsync(apiClient, authToken, chunkHeaders, qrmk, url, semaphore, cts.Token);
+                }
+
+                for (int i = 0; i < pendingChunks.Length; i++)
+                {
+                    var chunk = await pendingChunks[i].ConfigureAwait(false);
+                    await channel.Writer.WriteAsync(chunk, cts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                channel.Writer.TryComplete(ex);
+                return;
+            }
+            finally
+            {
+                semaphore.Dispose();
+            }
+
+            channel.Writer.TryComplete();
+        });
+    }
+
+    private static async Task<PrefetchedChunk> DownloadChunkAsync(
+        IRestApiClient apiClient,
+        AuthenticationToken authToken,
+        Dictionary<string, string>? chunkHeaders,
+        string? qrmk,
+        string url,
+        SemaphoreSlim semaphore,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var batch = await _currentReader.ReadNextRecordBatchAsync(cancellationToken);
-                if (batch != null)
-                    return batch;
-
-                if (_chunkUrls.Count == 0)
-                    return null;
-
-                DisposeCurrentReaderAndStream();
-
-                var nextUrl = _chunkUrls.Dequeue();
-                _currentStream = await _apiClient.GetArrowStreamAsync(
-                    nextUrl,
-                    _authToken,
-                    _chunkHeaders,
-                    _qrmk,
-                    cancellationToken).ConfigureAwait(false);
-                _currentReader = new Ipc.ArrowStreamReader(_currentStream);
-            }
+            var stream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
+            return new PrefetchedChunk(stream);
         }
         finally
         {
-            _gate.Release();
+            semaphore.Release();
+        }
+    }
+
+    public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_currentReader != null)
+            {
+                var batch = await _currentReader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                if (batch != null)
+                    return batch;
+                DisposeCurrentReaderAndStream();
+            }
+
+            if (!await _channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                return null;
+
+            if (!_channel.Reader.TryRead(out var nextChunk))
+                return null;
+
+            _currentStream = nextChunk.Stream;
+            _currentReader = new Ipc.ArrowStreamReader(_currentStream);
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
+        if (_disposed) return;
         _disposed = true;
+        _cts.Cancel();
         DisposeCurrentReaderAndStream();
-        _gate.Dispose();
+        while (_channel.Reader.TryRead(out var chunk))
+            chunk.Stream.Dispose();
+        try { _prefetchTask.GetAwaiter().GetResult(); } catch { }
+        _cts.Dispose();
     }
 
     private void DisposeCurrentReaderAndStream()
     {
-        try
-        {
-            _currentReader?.Dispose();
-        }
-        finally
-        {
-            _currentStream?.Dispose();
-        }
+        try { _currentReader?.Dispose(); } finally { _currentStream?.Dispose(); }
+        _currentReader = null;
+        _currentStream = null;
     }
+
+    private readonly record struct PrefetchedChunk(Stream Stream);
 }

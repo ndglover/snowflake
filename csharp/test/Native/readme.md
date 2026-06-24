@@ -41,7 +41,7 @@ the regression net for the protocol/encoding code.
 
 | File | What it covers |
 |------|----------------|
-| `SampleDataTests.cs` | **Content-asserting** tests against the shared read-only `SNOWFLAKE_SAMPLE_DATA` (TPC-H SF1). Because that data has fixed cardinalities/contents in every account, these verify *real values*: REGION's 5 region names, NATION = 25 rows/4 cols, CUSTOMER = full 150,000-row chunk streaming, invalid-SQL → `AdbcException`, deterministic `GetTableSchema` types, `GetTableTypes` = TABLE/VIEW, `GetInfo` vendor = "Snowflake", and `GetObjects` navigated through the nested Arrow down to NATION's columns. |
+| `QueryAndMetadataTests.cs` | **Content-asserting** tests against the shared read-only `SNOWFLAKE_SAMPLE_DATA` (TPC-H SF1). Because that data has fixed cardinalities/contents in every account, these verify *real values*: REGION's 5 region names, NATION = 25 rows/4 cols, CUSTOMER = full 150,000-row chunk streaming, invalid-SQL → `AdbcException`, deterministic `GetTableSchema` types, `GetTableTypes` = TABLE/VIEW, `GetInfo` vendor = "Snowflake", and `GetObjects` navigated through the nested Arrow down to NATION's columns. |
 | `DriverTests.cs` | Baseline driver surface: connect, execute query, execute update (DML affected-rows), and the metadata entry points (`GetInfo`/`GetTableTypes`/`GetTableSchema`/`GetObjects`). Uses the configured `metadata.*` table. |
 | `StatementTests.cs` | Statement surface: execute query, `ExecuteUpdate` on a SELECT → -1, `GetParameterSchema` before `Prepare` throws, and prepare-then-execute. |
 | `ClientTests.cs` | Client/connection patterns: sync and async connect + query/update/get-schema. |
@@ -71,11 +71,16 @@ the regression net for the protocol/encoding code.
 ### Integration tests
 - A reachable **Snowflake account** and login (username/password, key-pair/JWT, or
   OAuth — see config below).
-- A **running warehouse** (the sample-data queries need compute).
-- The **`SNOWFLAKE_SAMPLE_DATA`** share mounted (it is, by default) — required by
-  `SampleDataTests` and `ClientIntegrationTests`.
-- For `DriverTests`/`StatementTests` metadata tests: a **writable database/schema** and
-  the `metadata.*` table populated in the config (the sample share is read-only).
+- A **running warehouse**.
+- The **`SNOWFLAKE_SAMPLE_DATA`** share — mounted by default, **no setup required** — for the
+  suites that read it (the query/metadata/benchmark tests).
+- A **writable database + schema** for the write-path tests (anything that creates a
+  `TEMPORARY` table — e.g. `DriverTests.CanExecuteUpdate` and the `ClientTests` write test).
+  This is the only manual prerequisite: create a database your role can write to (e.g.
+  `CREATE DATABASE ADBC_TEST;` — a `PUBLIC` schema is created automatically) and point
+  `metadata.catalog` / `metadata.schema` at it. The tests create their own **temporary**
+  tables, so nothing needs to be pre-created or seeded; if no writable schema is configured,
+  those tests `Skip`.
 
 ---
 
@@ -113,7 +118,7 @@ disabled because it does not populate the `metadata.*` block the metadata tests 
 }
 ```
 
-`SampleDataTests` ignores `metadata.*`/`query` (it targets `SNOWFLAKE_SAMPLE_DATA`
+`QueryAndMetadataTests` ignores `metadata.*`/`query` (it targets `SNOWFLAKE_SAMPLE_DATA`
 directly), so it works with only valid credentials + a warehouse. The other suites use
 `query`/`metadata.*`.
 
@@ -143,7 +148,7 @@ dotnet test --filter "Category=Unit"
 dotnet test --filter "Category=Integration"
 
 # A single integration suite
-dotnet test --filter "Category=Integration & FullyQualifiedName~SampleDataTests"
+dotnet test --filter "Category=Integration & FullyQualifiedName~QueryAndMetadataTests"
 
 # Everything — integration tests skip automatically if SNOWFLAKE_TEST_CONFIG_FILE is unset
 dotnet test

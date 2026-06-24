@@ -35,19 +35,23 @@ using Apache.Arrow.Types;
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
-/// Content-asserting integration tests against Snowflake's shared, read-only
-/// <c>SNOWFLAKE_SAMPLE_DATA</c> database (the TPC-H SF1 schema). Unlike the baseline
-/// <see cref="DriverTests"/> (which mostly assert non-null), these verify real, stable
-/// values — the TPC-H reference data has fixed cardinalities and contents in every
-/// account, so the assertions below hold anywhere the sample share is mounted (the
-/// default). This is the closest we get to "verify for real".
+/// End-to-end tests of the driver's <b>query execution and metadata</b> functionality:
+/// running queries, streaming results (including multi-chunk), error propagation, and the
+/// metadata methods (GetObjects / GetTableSchema / GetTableTypes / GetInfo).
+///
+/// These run against the shared, read-only <c>SNOWFLAKE_SAMPLE_DATA</c> (TPC-H SF1) dataset.
+/// That dependency is deliberate: these tests need persistent catalog/table structure (for
+/// GetObjects) and a large table (to force multi-chunk streaming) — things a session-scoped
+/// temporary table can't provide. The dataset's fixed cardinalities/contents also let the
+/// tests assert real, stable values rather than just non-null. The sample share is mounted
+/// in every account by default, so no setup is required.
 ///
 /// Requires a live Snowflake instance with a usable warehouse; set
 /// SNOWFLAKE_TEST_CONFIG_FILE. Each test is a <see cref="SkippableFact"/> that no-ops
 /// when no account is configured.
 /// </summary>
 [Trait("Category", "Integration")]
-public class SampleDataTests : IDisposable
+public class QueryAndMetadataTests : IDisposable
 {
     // SNOWFLAKE_SAMPLE_DATA is shared into every account by default and is read-only,
     // so these identifiers and the row counts below are stable reference points.
@@ -57,7 +61,7 @@ public class SampleDataTests : IDisposable
     private readonly ITestOutputHelper _output;
     private readonly IntegrationTestConfiguration _testConfiguration;
 
-    public SampleDataTests(ITestOutputHelper output)
+    public QueryAndMetadataTests(ITestOutputHelper output)
     {
         _output = output;
         _testConfiguration = IntegrationTestingUtils.TestConfiguration;

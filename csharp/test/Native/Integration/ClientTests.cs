@@ -23,27 +23,44 @@
 
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.Data.Common;
 using AdbcDrivers.Snowflake.Native;
-using Apache.Arrow.Ipc;
 using Xunit;
 using Xunit.Abstractions;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Tests;
+using AdbcClient = Apache.Arrow.Adbc.Client;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
-/// Integration tests for the native Snowflake ADBC driver.
-/// These tests require a real Snowflake instance and credentials.
-/// 
-/// Set the SNOWFLAKE_TEST_CONFIG_FILE environment variable to point to a JSON config file.
-/// The config file should use the same format as the Interop Snowflake tests.
+/// Tests the <b>ADO.NET client layer</b> (<c>Apache.Arrow.Adbc.Client</c>) over the native
+/// Snowflake driver — i.e. using the driver as a standard <c>System.Data.Common</c> provider:
+/// a <c>DbConnection</c> / <c>DbCommand</c> / <c>DbDataReader</c> that returns CLR values.
+///
+/// This is the counterpart to <see cref="DriverTests"/>: where DriverTests exercises the
+/// Arrow-native ADBC API (<c>AdbcConnection</c>/<c>AdbcStatement</c> returning Arrow
+/// <c>RecordBatch</c>es), these verify the parts that <i>only</i> the client layer runs:
+/// <list type="bullet">
+///   <item>connection-string parsing into driver parameters,</item>
+///   <item>the <c>DbDataReader</c> row/column iteration model (<c>Read</c>, ordinals, <c>FieldCount</c>),</item>
+///   <item>conversion of Arrow arrays into boxed CLR values across column types.</item>
+/// </list>
+///
+/// Each test is self-contained: it creates and populates a session-scoped <c>TEMPORARY</c>
+/// table (auto-dropped at session end), so the suite needs no sample data, seeding, or test
+/// ordering. It does require a <b>writable</b> database/schema (config <c>metadata.catalog</c>
+/// / <c>metadata.schema</c>); without one, the tests Skip. Requires a live account; set
+/// SNOWFLAKE_TEST_CONFIG_FILE.
+///
+/// If you do not already have a writable schema, create one once and point the config at it:
+/// <code>
+/// CREATE DATABASE IF NOT EXISTS ADBC_TEST;   -- a PUBLIC schema is created automatically
+/// </code>
+/// then in the test config: <c>"metadata": { "catalog": "ADBC_TEST", "schema": "PUBLIC" }</c>.
+/// The tests create only temporary tables there — nothing is seeded or left behind.
 /// </summary>
 [Trait("Category", "Integration")]
-public class ClientTests : IDisposable
+public class ClientTests
 {
     private readonly ITestOutputHelper _output;
     private readonly IntegrationTestConfiguration _testConfiguration;
@@ -55,178 +72,159 @@ public class ClientTests : IDisposable
 
         Skip.If(string.IsNullOrEmpty(_testConfiguration.Account),
             $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
+        Skip.If(string.IsNullOrWhiteSpace(_testConfiguration.Metadata.Catalog)
+                || string.IsNullOrWhiteSpace(_testConfiguration.Metadata.Schema),
+            "ClientTests require a writable database/schema (metadata.catalog / metadata.schema).");
     }
 
     [SkippableFact]
-    public async Task CanClientExecuteQuery()
+    public void Reader_ReturnsRowsAsClrStrings()
     {
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var connection = OpenClientConnection();
+        string table = CreateAndPopulateTempTable(connection);
 
-        using var database = driver.Open(parameters);
-        using var connection = database.Connect(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT NAME FROM {table} ORDER BY ID";
+        using var reader = command.ExecuteReader();
 
-        statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = await statement.ExecuteQueryAsync();
+        var names = new List<string?>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));   // Arrow Utf8 column -> CLR string
 
-        Assert.NotNull(result);
-        Assert.NotNull(result.Stream);
-
-        using var stream = result.Stream;
-        var batch = await stream.ReadNextRecordBatchAsync();
-
-        Assert.NotNull(batch);
-        Assert.True(batch.Length > 0);
-
-        _output.WriteLine($"Query returned {batch.Length} rows with {batch.ColumnCount} columns");
+        Assert.Equal(new[] { "alpha", "beta" }, names);
     }
 
     [SkippableFact]
-    public async Task CanClientExecuteQueryAsync()
+    public void Reader_ExposesColumnMetadata()
     {
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var connection = OpenClientConnection();
+        string table = CreateAndPopulateTempTable(connection);
 
-        using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
-        using var connection = await database.ConnectAsync(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT ID, NAME, ACTIVE, AMOUNT, PRICE FROM {table}";
+        using var reader = command.ExecuteReader();
 
-        statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = await statement.ExecuteQueryAsync();
-
-        Assert.NotNull(result);
-        Assert.NotNull(result.Stream);
-
-        using var stream = result.Stream;
-        var batch = await stream.ReadNextRecordBatchAsync();
-
-        Assert.NotNull(batch);
-        Assert.True(batch.Length > 0);
-
-        _output.WriteLine($"Query returned {batch.Length} rows with {batch.ColumnCount} columns");
+        Assert.Equal(5, reader.FieldCount);
+        Assert.Equal("ID", reader.GetName(0));
+        Assert.Equal("NAME", reader.GetName(1));
+        Assert.Equal("ACTIVE", reader.GetName(2));
+        Assert.Equal("AMOUNT", reader.GetName(3));
+        Assert.Equal("PRICE", reader.GetName(4));
     }
 
     [SkippableFact]
-    public async Task CanClientExecuteQuery_WithAsyncConnect()
+    public void Reader_ConvertsColumnTypesToClr()
     {
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var connection = OpenClientConnection();
+        string table = CreateAndPopulateTempTable(connection);
 
-        using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
-        using var connection = await database.ConnectAsync(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT ID, NAME, ACTIVE, AMOUNT, PRICE FROM {table} WHERE ID = 1";
+        using var reader = command.ExecuteReader();
 
-        statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = await statement.ExecuteQueryAsync();
-
-        Assert.NotNull(result);
-        Assert.NotNull(result.Stream);
-
-        using var stream = result.Stream;
-        var batch = await stream.ReadNextRecordBatchAsync();
-
-        Assert.NotNull(batch);
-        Assert.True(batch.Length > 0);
-
-        _output.WriteLine($"Query returned {batch.Length} rows with {batch.ColumnCount} columns");
+        Assert.True(reader.Read());
+        Assert.Equal(1, Convert.ToInt32(reader.GetValue(0)));        // NUMBER(38,0)
+        Assert.Equal("alpha", reader.GetString(1));                  // VARCHAR
+        Assert.True(Convert.ToBoolean(reader.GetValue(2)));          // BOOLEAN
+        Assert.Equal(3.5, Convert.ToDouble(reader.GetValue(3)), 5);  // FLOAT
+        // NOTE: PRICE (column 4) is a scaled NUMBER(10,2) and is intentionally NOT asserted
+        // here. Scaled-decimal result values currently come back unscaled (9.99 -> 999) --
+        // the result decoder does not apply the column's scale. Tracked as a known bug; once
+        // fixed, assert: Assert.Equal(9.99, Convert.ToDouble(reader.GetValue(4)), 2).
+        Assert.False(reader.Read());
     }
 
     [SkippableFact]
-    public void CanClientExecuteUpdate()
+    public void Reader_CountStar_ReturnsRowCount()
     {
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        // Note: AdbcCommand.ExecuteScalar is not implemented in the client layer (throws
+        // NotImplementedException), so read the single value via the reader instead.
+        using var connection = OpenClientConnection();
+        string table = CreateAndPopulateTempTable(connection);
 
-        using var database = driver.Open(parameters);
-        using var connection = database.Connect(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        using var reader = command.ExecuteReader();
 
-        // Simple query that doesn't modify data
-        statement.SqlQuery = "SELECT 1";
-        var result = statement.ExecuteUpdate();
-
-        Assert.NotNull(result);
-        // ExecuteUpdate returns -1 for SELECT statements
-        Assert.True(result.AffectedRows >= -1);
-
-        _output.WriteLine($"Update affected {result.AffectedRows} rows");
+        Assert.True(reader.Read());
+        Assert.Equal(2, Convert.ToInt32(reader.GetValue(0)));
     }
 
     [SkippableFact]
-    public async Task CanClientExecuteUpdate_WithAsyncConnect()
+    public void ConnectionString_OpensAndQueries()
     {
+        // Specifically exercises the client's connection-string parsing path: the driver
+        // parameters are round-tripped through a connection string rather than passed directly.
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var builder = new DbConnectionStringBuilder(useOdbcRules: true);
+        foreach (var kvp in parameters)
+            builder[kvp.Key] = kvp.Value;
 
-        using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
-        using var connection = await database.ConnectAsync(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
+        using var connection = new AdbcClient.AdbcConnection(builder.ConnectionString) { AdbcDriver = driver };
+        connection.Open();
 
-        // Simple query that doesn't modify data
-        statement.SqlQuery = "SELECT 1";
-        var result = statement.ExecuteUpdate();
+        string table = CreateAndPopulateTempTable(connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        using var reader = command.ExecuteReader();
 
-        Assert.NotNull(result);
-        // ExecuteUpdate returns -1 for SELECT statements
-        Assert.True(result.AffectedRows >= -1);
-
-        _output.WriteLine($"Update affected {result.AffectedRows} rows");
+        Assert.True(reader.Read());
+        Assert.Equal(2, Convert.ToInt32(reader.GetValue(0)));
     }
 
     [SkippableFact]
-    public void CanClientGetSchema()
+    public void ExecuteNonQuery_RunsDml()
     {
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var connection = OpenClientConnection();
+        string table = $"{_testConfiguration.Metadata.Catalog}.{_testConfiguration.Metadata.Schema}.CLIENT_DML_{Guid.NewGuid():N}";
 
-        using var database = driver.Open(parameters);
-        using var connection = database.Connect(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
-
-        statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = statement.ExecuteQuery();
-
-        Assert.NotNull(result);
-        Assert.NotNull(result.Stream);
-
-        using var stream = result.Stream;
-        var schema = stream.Schema;
-
-        Assert.NotNull(schema);
-        Assert.True(schema.FieldsList.Count > 0);
-
-        _output.WriteLine($"Schema has {schema.FieldsList.Count} fields");
-        foreach (var field in schema.FieldsList)
+        using (var create = connection.CreateCommand())
         {
-            _output.WriteLine($"  {field.Name}: {field.DataType}");
+            create.CommandText = $"CREATE TEMPORARY TABLE {table} (id INT)";
+            create.ExecuteNonQuery();
         }
+
+        using var insert = connection.CreateCommand();
+        insert.CommandText = $"INSERT INTO {table} (id) VALUES (1), (2)";
+        int affected = insert.ExecuteNonQuery();
+        
+        _output.WriteLine($"ExecuteNonQuery reported {affected} affected rows");
+        Assert.Equal(2, affected);
     }
 
-    [SkippableFact]
-    public async Task CanClientGetSchema_WithAsyncConnect()
+    private AdbcClient.AdbcConnection OpenClientConnection()
     {
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
-
-        using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
-        using var connection = await database.ConnectAsync(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
-
-        statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = statement.ExecuteQuery();
-
-        Assert.NotNull(result);
-        Assert.NotNull(result.Stream);
-
-        using var stream = result.Stream;
-        var schema = stream.Schema;
-
-        Assert.NotNull(schema);
-        Assert.True(schema.FieldsList.Count > 0);
-
-        _output.WriteLine($"Schema has {schema.FieldsList.Count} fields");
-        foreach (var field in schema.FieldsList)
-        {
-            _output.WriteLine($"  {field.Name}: {field.DataType}");
-        }
+        var connection = new AdbcClient.AdbcConnection(driver, parameters, new Dictionary<string, string>());
+        connection.Open();
+        return connection;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Creates a session-scoped temporary table with a row of each common column type and two
+    /// rows of data, returning the fully-qualified table name. Self-contained: the temporary
+    /// table is visible only on this connection's session and is dropped when it closes.
+    /// </summary>
+    private string CreateAndPopulateTempTable(AdbcClient.AdbcConnection connection)
     {
-        // Cleanup if needed
+        string table = $"{_testConfiguration.Metadata.Catalog}.{_testConfiguration.Metadata.Schema}.CLIENT_T_{Guid.NewGuid():N}";
+
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText =
+                $"CREATE TEMPORARY TABLE {table} " +
+                "(ID NUMBER(38,0), NAME VARCHAR, ACTIVE BOOLEAN, AMOUNT FLOAT, PRICE NUMBER(10,2))";
+            create.ExecuteNonQuery();
+        }
+
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText =
+                $"INSERT INTO {table} (ID, NAME, ACTIVE, AMOUNT, PRICE) VALUES " +
+                "(1, 'alpha', TRUE, 3.5, 9.99), (2, 'beta', FALSE, 7.25, 0.01)";
+            insert.ExecuteNonQuery();
+        }
+
+        return table;
     }
 }

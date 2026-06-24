@@ -26,41 +26,41 @@ using System.Collections.Generic;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
-internal class SnowflakeTestingUtils
+internal class IntegrationTestingUtils
 {
-    internal static readonly SnowflakeTestConfiguration TestConfiguration;
+    internal static readonly IntegrationTestConfiguration TestConfiguration;
 
     internal const string SnowflakeTestConfigVariable = "SNOWFLAKE_TEST_CONFIG_FILE";
 
-    static SnowflakeTestingUtils()
+    static IntegrationTestingUtils()
     {
-        TestConfiguration = new SnowflakeTestConfiguration();
+        TestConfiguration = new IntegrationTestConfiguration();
         if (string.IsNullOrEmpty(TestConfiguration.Account))
         {
             try
             {
-                TestConfiguration = Utils.LoadTestConfiguration<SnowflakeTestConfiguration>(SnowflakeTestConfigVariable);
+                TestConfiguration = Utils.LoadTestConfiguration<IntegrationTestConfiguration>(SnowflakeTestConfigVariable);
             }
             catch (InvalidOperationException ex)
             {
                 Console.WriteLine($"Cannot load test configuration from environment variable `{SnowflakeTestConfigVariable}`");
                 Console.WriteLine(ex.Message);
-                TestConfiguration = new SnowflakeTestConfiguration();
+                TestConfiguration = new IntegrationTestConfiguration();
             }
         }
     }
 
     /// <summary>
     /// Gets the native Snowflake ADBC driver with settings from the
-    /// <see cref="SnowflakeTestConfiguration"/>.
+    /// <see cref="IntegrationTestConfiguration"/>.
     /// </summary>
     /// <param name="testConfiguration"></param>
     /// <param name="parameters"></param>
     /// <returns></returns>
     internal static AdbcDriver GetSnowflakeAdbcDriver(
-        SnowflakeTestConfiguration testConfiguration,
+        IntegrationTestConfiguration testConfiguration,
         out Dictionary<string, string> parameters)
     {
         parameters = new Dictionary<string, string>

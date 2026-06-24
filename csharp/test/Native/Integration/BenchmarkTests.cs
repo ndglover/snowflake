@@ -27,7 +27,7 @@ using System.Threading.Tasks;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Query throughput benchmark for the native C# Snowflake driver. Mirrors the Interop
@@ -39,15 +39,16 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// Requires a live Snowflake instance; set SNOWFLAKE_TEST_CONFIG_FILE with a <c>query</c>
 /// against a table large enough to satisfy the largest limit.
 /// </summary>
+[Trait("Category", "Integration")]
 public class BenchmarkTests
 {
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfig;
+    private readonly IntegrationTestConfiguration _testConfig;
 
     public BenchmarkTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfig = SnowflakeTestingUtils.TestConfiguration;
+        _testConfig = IntegrationTestingUtils.TestConfiguration;
     }
 
     [SkippableTheory]
@@ -58,7 +59,7 @@ public class BenchmarkTests
     {
         Skip.If(string.IsNullOrEmpty(_testConfig.Account), "Account not configured");
         Skip.If(string.IsNullOrWhiteSpace(_testConfig.Query), "No query configured");
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfig, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfig, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();

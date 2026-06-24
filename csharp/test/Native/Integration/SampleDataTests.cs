@@ -23,7 +23,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native;
 using Xunit;
 using Xunit.Abstractions;
@@ -32,7 +32,7 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Types;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Content-asserting integration tests against Snowflake's shared, read-only
@@ -46,6 +46,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// SNOWFLAKE_TEST_CONFIG_FILE. Each test is a <see cref="SkippableFact"/> that no-ops
 /// when no account is configured.
 /// </summary>
+[Trait("Category", "Integration")]
 public class SampleDataTests : IDisposable
 {
     // SNOWFLAKE_SAMPLE_DATA is shared into every account by default and is read-only,
@@ -54,30 +55,30 @@ public class SampleDataTests : IDisposable
     private const string SampleSchema = "TPCH_SF1";
 
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfiguration;
+    private readonly IntegrationTestConfiguration _testConfiguration;
 
     public SampleDataTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfiguration = SnowflakeTestingUtils.TestConfiguration;
+        _testConfiguration = IntegrationTestingUtils.TestConfiguration;
 
         Skip.If(string.IsNullOrEmpty(_testConfiguration.Account),
-            $"Cannot execute test configuration from environment variable `{SnowflakeTestingUtils.SnowflakeTestConfigVariable}`");
+            $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
     }
 
     // ---- Data path: known row counts and contents ----
 
     [SkippableFact]
-    public void Query_Region_ReturnsFiveKnownRows()
+    public async Task Query_Region_ReturnsFiveKnownRows()
     {
         using var connection = Connect();
         using var statement = connection.CreateStatement();
 
         // TPC-H REGION always has exactly 5 rows with these names.
         statement.SqlQuery = $"SELECT R_NAME FROM {SampleDb}.{SampleSchema}.REGION ORDER BY R_NAME";
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
-        List<string?> names = ReadStringColumn(result, columnIndex: 0);
+        List<string?> names = await ReadStringColumnAsync(result, columnIndex: 0);
 
         Assert.Equal(5, names.Count);
         Assert.Equal(
@@ -86,22 +87,22 @@ public class SampleDataTests : IDisposable
     }
 
     [SkippableFact]
-    public void Query_Nation_ReturnsTwentyFiveRowsWithFourColumns()
+    public async Task Query_Nation_ReturnsTwentyFiveRowsWithFourColumns()
     {
         using var connection = Connect();
         using var statement = connection.CreateStatement();
 
         statement.SqlQuery = $"SELECT * FROM {SampleDb}.{SampleSchema}.NATION";
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
-        long rows = SumRows(result, out int columnCount);
+        (long rows, int columnCount, _) = await ReadAllAsync(result);
 
         Assert.Equal(25, rows);
         Assert.Equal(4, columnCount);
     }
 
     [SkippableFact]
-    public void Query_Customer_StreamsAllChunks()
+    public async Task Query_Customer_StreamsAllChunks()
     {
         using var connection = Connect();
         using var statement = connection.CreateStatement();
@@ -110,9 +111,9 @@ public class SampleDataTests : IDisposable
         // so reaching the exact total proves the chunk-download + streaming path works
         // end to end, not just the first inline batch.
         statement.SqlQuery = $"SELECT C_CUSTKEY FROM {SampleDb}.{SampleSchema}.CUSTOMER";
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
-        long rows = SumRows(result, out int columnCount, out int batchCount);
+        (long rows, int columnCount, int batchCount) = await ReadAllAsync(result);
         _output.WriteLine($"CUSTOMER streamed {rows} rows across {batchCount} batch(es)");
 
         Assert.Equal(150_000, rows);
@@ -127,7 +128,7 @@ public class SampleDataTests : IDisposable
 
         statement.SqlQuery = $"SELECT * FROM {SampleDb}.{SampleSchema}.NO_SUCH_TABLE_XYZ";
 
-        Assert.Throws<AdbcException>(() => statement.ExecuteQuery());
+        Assert.Throws<AdbcException>(statement.ExecuteQuery);
     }
 
     // ---- Metadata: deterministic schema and object content ----
@@ -157,24 +158,24 @@ public class SampleDataTests : IDisposable
     }
 
     [SkippableFact]
-    public void GetTableTypes_ReturnsTableAndView()
+    public async Task GetTableTypes_ReturnsTableAndView()
     {
         using var connection = Connect();
 
         using var stream = connection.GetTableTypes();
-        List<string?> types = ReadAllStringColumn(stream, columnIndex: 0);
+        List<string?> types = await ReadAllStringColumnAsync(stream, columnIndex: 0);
 
         Assert.Contains("TABLE", types);
         Assert.Contains("VIEW", types);
     }
 
     [SkippableFact]
-    public void GetInfo_ReportsSnowflakeVendorName()
+    public async Task GetInfo_ReportsSnowflakeVendorName()
     {
         using var connection = Connect();
 
         using var stream = connection.GetInfo(new List<AdbcInfoCode> { AdbcInfoCode.VendorName });
-        RecordBatch? batch = stream.ReadNextRecordBatchAsync().Result;
+        RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
 
         Assert.NotNull(batch);
         using (batch)
@@ -187,7 +188,7 @@ public class SampleDataTests : IDisposable
     }
 
     [SkippableFact]
-    public void GetObjects_All_ReturnsNationColumns()
+    public async Task GetObjects_All_ReturnsNationColumns()
     {
         using var connection = Connect();
 
@@ -199,7 +200,7 @@ public class SampleDataTests : IDisposable
             null,
             null);
 
-        RecordBatch? batch = stream.ReadNextRecordBatchAsync().Result;
+        RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
 
         using (batch)
@@ -240,7 +241,7 @@ public class SampleDataTests : IDisposable
     }
 
     [SkippableFact]
-    public void GetObjects_Catalogs_ContainsSampleDatabase()
+    public async Task GetObjects_Catalogs_ContainsSampleDatabase()
     {
         using var connection = Connect();
 
@@ -252,7 +253,7 @@ public class SampleDataTests : IDisposable
             null,
             null);
 
-        RecordBatch? batch = stream.ReadNextRecordBatchAsync().Result;
+        RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
 
         using (batch)
@@ -262,33 +263,59 @@ public class SampleDataTests : IDisposable
         }
     }
 
+    [SkippableFact]
+    public async Task GetObjects_MaliciousCatalogPattern_IsTreatedAsLiteralNotSql()
+    {
+        using var connection = Connect();
+
+        // If the pattern were interpolated into SQL, the trailing "OR DATABASE_NAME='...'"
+        // would break out of the ILIKE literal and the real sample DB would come back. With
+        // server-side binding it is a literal pattern that matches no database, so the
+        // catalog list must be empty -- and must NOT contain SNOWFLAKE_SAMPLE_DATA.
+        string payload = $"x' OR DATABASE_NAME='{SampleDb}";
+
+        using var stream = connection.GetObjects(
+            AdbcConnection.GetObjectsDepth.Catalogs,
+            payload,
+            null,
+            null,
+            null,
+            null);
+
+        RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+        Assert.NotNull(batch);
+
+        using (batch)
+        {
+            var catalogNames = (StringArray)batch.Column(0);
+            _output.WriteLine($"Injection payload returned {catalogNames.Length} catalog(s)");
+            Assert.True(IndexOf(catalogNames, SampleDb) < 0,
+                "SQL injection succeeded: the malicious pattern returned the real database.");
+            Assert.Equal(0, catalogNames.Length);
+        }
+    }
+
     // ---- Helpers ----
 
     private SnowflakeConnection Connect()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         var database = driver.Open(parameters);
         var connection = database.Connect(new Dictionary<string, string>());
         return (SnowflakeConnection)connection;
     }
 
-    private static long SumRows(Apache.Arrow.Adbc.QueryResult result, out int columnCount) =>
-        SumRows(result, out columnCount, out _);
-
-    private static long SumRows(Apache.Arrow.Adbc.QueryResult result, out int columnCount, out int batchCount)
+    /// <summary>Reads the whole result stream, returning total rows, column count, and batch count.</summary>
+    private static async Task<(long Rows, int ColumnCount, int BatchCount)> ReadAllAsync(Apache.Arrow.Adbc.QueryResult result)
     {
         Assert.NotNull(result.Stream);
         long total = 0;
-        columnCount = 0;
-        batchCount = 0;
+        int columnCount = 0;
+        int batchCount = 0;
 
         using var stream = result.Stream;
-        while (true)
+        while (await stream.ReadNextRecordBatchAsync() is { } batch)
         {
-            RecordBatch? batch = stream.ReadNextRecordBatchAsync().Result;
-            if (batch == null)
-                break;
-
             using (batch)
             {
                 columnCount = batch.ColumnCount;
@@ -297,25 +324,21 @@ public class SampleDataTests : IDisposable
             }
         }
 
-        return total;
+        return (total, columnCount, batchCount);
     }
 
-    private static List<string?> ReadStringColumn(Apache.Arrow.Adbc.QueryResult result, int columnIndex)
+    private static async Task<List<string?>> ReadStringColumnAsync(Apache.Arrow.Adbc.QueryResult result, int columnIndex)
     {
         Assert.NotNull(result.Stream);
         using var stream = result.Stream;
-        return ReadAllStringColumn(stream, columnIndex);
+        return await ReadAllStringColumnAsync(stream, columnIndex);
     }
 
-    private static List<string?> ReadAllStringColumn(Apache.Arrow.Ipc.IArrowArrayStream stream, int columnIndex)
+    private static async Task<List<string?>> ReadAllStringColumnAsync(Apache.Arrow.Ipc.IArrowArrayStream stream, int columnIndex)
     {
         var values = new List<string?>();
-        while (true)
+        while (await stream.ReadNextRecordBatchAsync() is { } batch)
         {
-            RecordBatch? batch = stream.ReadNextRecordBatchAsync().Result;
-            if (batch == null)
-                break;
-
             using (batch)
             {
                 var column = (StringArray)batch.Column(columnIndex);

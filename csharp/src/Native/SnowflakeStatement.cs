@@ -27,6 +27,7 @@ using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 using AdbcDrivers.Snowflake.Native.Services.Query;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 using Apache.Arrow;
@@ -46,7 +47,6 @@ public sealed class SnowflakeStatement : AdbcStatement
     private readonly IPooledConnection _pooledConnection;
     private readonly IQueryExecutor _queryExecutor;
     private readonly ITypeConverter _typeConverter;
-    private PreparedStatement? _preparedStatement;
     private RecordBatch? _boundParameters;
     private bool _disposed;
 
@@ -127,7 +127,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 foreach (var kvp in parameterSet.Parameters)
                 {
                     if (kvp.Value != null)
-                        request.Parameters[kvp.Key] = kvp.Value;
+                        request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
                 }
             }
 
@@ -201,7 +201,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 foreach (var kvp in parameterSet.Parameters)
                 {
                     if (kvp.Value != null)
-                        request.Parameters[kvp.Key] = kvp.Value;
+                        request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
                 }
             }
 
@@ -235,53 +235,30 @@ public sealed class SnowflakeStatement : AdbcStatement
     /// <summary>
     /// Prepares the statement for execution.
     /// </summary>
+    /// <remarks>
+    /// Snowflake has no server-side prepare step -- statements are compiled when they are
+    /// executed -- so this only validates that a query has been set and otherwise does nothing.
+    /// </remarks>
     public override void Prepare()
     {
         ThrowIfDisposed();
 
         if (string.IsNullOrWhiteSpace(SqlQuery))
             throw new InvalidOperationException("SQL query must be set before preparation.");
-
-        try
-        {
-            var request = new QueryRequest
-            {
-                Statement = SqlQuery,
-                Database = _config.Database,
-                Schema = _config.Schema,
-                Warehouse = _config.Warehouse,
-                Role = _config.Role,
-                Timeout = _config.QueryTimeout,
-                AuthToken = _pooledConnection.AuthToken
-            };
-
-            // Use ConfigureAwait(false) to avoid deadlocks
-            _preparedStatement = _queryExecutor.DescribeAsync(request)
-                .ConfigureAwait(false).GetAwaiter().GetResult();
-        }
-        catch (AdbcException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new AdbcException($"Statement preparation failed: {ex.Message}", ex);
-        }
     }
 
     /// <summary>
-    /// Gets the parameter schema for the prepared statement.
+    /// Gets the parameter schema for a prepared statement.
     /// </summary>
-    /// <returns>The Arrow schema for parameters.</returns>
+    /// <remarks>
+    /// Not supported: Snowflake's protocol does not report the types of a statement's bind
+    /// parameters, so a parameter schema cannot be determined.
+    /// </remarks>
     public override Schema GetParameterSchema()
     {
         ThrowIfDisposed();
 
-        if (_preparedStatement == null)
-            throw new InvalidOperationException("Statement must be prepared before getting parameter schema.");
-
-        return _preparedStatement.ParameterSchema
-            ?? throw new InvalidOperationException("Prepared statement does not have a parameter schema.");
+        throw new NotImplementedException("Snowflake does not provide a parameter schema.");
     }
 
     /// <summary>
@@ -291,8 +268,6 @@ public sealed class SnowflakeStatement : AdbcStatement
     {
         if (!_disposed)
         {
-            _preparedStatement = null;
-
             _boundParameters?.Dispose();
             _boundParameters = null;
 

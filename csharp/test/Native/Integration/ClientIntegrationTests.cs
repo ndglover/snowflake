@@ -29,24 +29,25 @@ using Xunit.Abstractions;
 
 using Apache.Arrow;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Integration tests that execute real queries against Snowflake.
 /// </summary>
+[Trait("Category", "Integration")]
 public class ClientIntegrationTests
 {
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfiguration;
+    private readonly IntegrationTestConfiguration _testConfiguration;
 
     public ClientIntegrationTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfiguration = SnowflakeTestingUtils.TestConfiguration;
+        _testConfiguration = IntegrationTestingUtils.TestConfiguration;
 
         Skip.If(
             string.IsNullOrWhiteSpace(_testConfiguration.Account),
-            $"Cannot execute test configuration from environment variable `{SnowflakeTestingUtils.SnowflakeTestConfigVariable}`");
+            $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
     }
 
     // Note: the parameterized query-throughput benchmark lives in BenchmarkTests
@@ -71,7 +72,7 @@ public class ClientIntegrationTests
 
     private async Task<(long TotalRows, int BatchCount, Schema Schema, System.TimeSpan Elapsed)> ExecuteQueryAndReadResultsAsync(string query)
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());

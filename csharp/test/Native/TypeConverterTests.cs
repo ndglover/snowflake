@@ -34,6 +34,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// Offline unit tests for <see cref="TypeConverter"/> (Snowflake &lt;-&gt; Arrow type mapping).
 /// These require no Snowflake connection.
 /// </summary>
+[Trait("Category", "Unit")]
 public class TypeConverterTests
 {
     private readonly TypeConverter _converter = new();
@@ -138,7 +139,7 @@ public class TypeConverterTests
         Assert.Equal("DATE", _converter.ConvertArrowTypeToSnowflake(Date32Type.Default).TypeName);
         Assert.Equal("ARRAY", _converter.ConvertArrowTypeToSnowflake(new ListType(StringType.Default)).TypeName);
         Assert.Equal("OBJECT", _converter.ConvertArrowTypeToSnowflake(
-            new StructType(new[] { new Field("x", Int32Type.Default, true) })).TypeName);
+            new StructType([new Field("x", Int32Type.Default, true)])).TypeName);
     }
 
     [Fact]
@@ -181,13 +182,13 @@ public class TypeConverterTests
     public void ConvertArrowBatchToParameters_UsesFirstRowValuesKeyedByFieldName()
     {
         var schema = new Schema(
-            new[] { new Field("A", Int64Type.Default, true), new Field("B", StringType.Default, true) },
+            [new Field("A", Int64Type.Default, true), new Field("B", StringType.Default, true)],
             null);
         IArrowArray idArray = new Int64Array.Builder().Append(42).Build();
         IArrowArray nameArray = new StringArray.Builder().Append("hello").Build();
-        using var batch = new RecordBatch(schema, new[] { idArray, nameArray }, 1);
+        using var batch = new RecordBatch(schema, [idArray, nameArray], 1);
 
-        ParameterSet result = _converter.ConvertArrowBatchToParameters(batch);
+        var result = _converter.ConvertArrowBatchToParameters(batch);
 
         Assert.Equal(2, result.Parameters.Count);
         Assert.Equal(42L, result.Parameters["A"]);
@@ -197,9 +198,9 @@ public class TypeConverterTests
     [Fact]
     public void ConvertArrowBatchToParameters_EmptyBatch_ReturnsNoParameters()
     {
-        var schema = new Schema(new[] { new Field("A", Int64Type.Default, true) }, null);
+        var schema = new Schema([new Field("A", Int64Type.Default, true)], null);
         IArrowArray empty = new Int64Array.Builder().Build();
-        using var batch = new RecordBatch(schema, new[] { empty }, 0);
+        using var batch = new RecordBatch(schema, [empty], 0);
 
         ParameterSet result = _converter.ConvertArrowBatchToParameters(batch);
 
@@ -219,16 +220,16 @@ public class TypeConverterTests
     {
         var resultSet = new SnowflakeResultSet
         {
-            Columns = new[]
-            {
+            Columns =
+            [
                 new SnowflakeColumnMetadata { Name = "ID", DataType = new SnowflakeDataType { TypeName = "NUMBER", Precision = 38, Scale = 0 } },
                 new SnowflakeColumnMetadata { Name = "NAME", DataType = new SnowflakeDataType { TypeName = "VARCHAR", IsNullable = true } }
-            },
-            Rows = new[]
-            {
-                new object?[] { 1L, "a" },
-                new object?[] { 2L, null }
-            }
+            ],
+            Rows =
+            [
+                [1L, "a"],
+                [2L, null]
+            ]
         };
 
         using RecordBatch batch = _converter.ConvertSnowflakeResultToArrow(resultSet);

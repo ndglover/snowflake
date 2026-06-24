@@ -23,7 +23,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using AdbcDrivers.Snowflake.Native.Services.Query;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Apache.Arrow.Ipc;
 
 using Apache.Arrow;
@@ -62,11 +64,16 @@ public sealed partial class SnowflakeConnection
         var catalogNameBuilder = new StringArray.Builder();
         var catalogDbSchemasValues = new List<IArrowArray?>();
 
-        string sql = "SELECT DATABASE_NAME::VARCHAR AS name FROM INFORMATION_SCHEMA.DATABASES"
-            + IlikeWhere("DATABASE_NAME", catalogPattern)
-            + " ORDER BY DATABASE_NAME";
+        var binds = new List<string?>();
+        string sql = "SELECT DATABASE_NAME::VARCHAR AS name FROM INFORMATION_SCHEMA.DATABASES";
+        if (!string.IsNullOrEmpty(catalogPattern))
+        {
+            sql += " WHERE DATABASE_NAME ILIKE ?";
+            binds.Add(catalogPattern);
+        }
+        sql += " ORDER BY DATABASE_NAME";
 
-        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql))
+        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql, binds))
         {
             string? catalog = row["name"];
             if (catalog == null)
@@ -93,11 +100,16 @@ public sealed partial class SnowflakeConnection
         var nullBitmap = new ArrowBuffer.BitmapBuilder();
         int length = 0;
 
-        string sql = $"SELECT SCHEMA_NAME::VARCHAR AS name FROM {QuoteIdentifier(catalog)}.INFORMATION_SCHEMA.SCHEMATA"
-            + IlikeWhere("SCHEMA_NAME", dbSchemaPattern)
-            + " ORDER BY SCHEMA_NAME";
+        var binds = new List<string?>();
+        string sql = $"SELECT SCHEMA_NAME::VARCHAR AS name FROM {QuoteIdentifier(catalog)}.INFORMATION_SCHEMA.SCHEMATA";
+        if (!string.IsNullOrEmpty(dbSchemaPattern))
+        {
+            sql += " WHERE SCHEMA_NAME ILIKE ?";
+            binds.Add(dbSchemaPattern);
+        }
+        sql += " ORDER BY SCHEMA_NAME";
 
-        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql))
+        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql, binds))
         {
             string? schemaName = row["name"];
             if (schemaName == null)
@@ -131,13 +143,18 @@ public sealed partial class SnowflakeConnection
         var nullBitmap = new ArrowBuffer.BitmapBuilder();
         int length = 0;
 
+        var binds = new List<string?> { dbSchema };
         string sql = $"SELECT TABLE_NAME::VARCHAR AS name, TABLE_TYPE::VARCHAR AS type "
             + $"FROM {QuoteIdentifier(catalog)}.INFORMATION_SCHEMA.TABLES "
-            + $"WHERE TABLE_SCHEMA ILIKE '{Sanitize(dbSchema)}'"
-            + (string.IsNullOrEmpty(tableNamePattern) ? string.Empty : $" AND TABLE_NAME ILIKE '{Sanitize(tableNamePattern!)}'")
-            + " ORDER BY TABLE_NAME";
+            + "WHERE TABLE_SCHEMA ILIKE ?";
+        if (!string.IsNullOrEmpty(tableNamePattern))
+        {
+            sql += " AND TABLE_NAME ILIKE ?";
+            binds.Add(tableNamePattern);
+        }
+        sql += " ORDER BY TABLE_NAME";
 
-        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql))
+        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql, binds))
         {
             string? tableName = row["name"];
             if (tableName == null)
@@ -203,11 +220,16 @@ public sealed partial class SnowflakeConnection
             + "DATETIME_PRECISION::VARCHAR AS datetime_precision, CHARACTER_OCTET_LENGTH::VARCHAR AS char_octet_length, "
             + "COLUMN_DEFAULT::VARCHAR AS column_default "
             + $"FROM {QuoteIdentifier(catalog)}.INFORMATION_SCHEMA.COLUMNS "
-            + $"WHERE TABLE_SCHEMA ILIKE '{Sanitize(dbSchema)}' AND TABLE_NAME ILIKE '{Sanitize(tableName)}'"
-            + (string.IsNullOrEmpty(columnNamePattern) ? string.Empty : $" AND COLUMN_NAME ILIKE '{Sanitize(columnNamePattern!)}'")
-            + " ORDER BY ORDINAL_POSITION";
+            + "WHERE TABLE_SCHEMA ILIKE ? AND TABLE_NAME ILIKE ?";
+        var binds = new List<string?> { dbSchema, tableName };
+        if (!string.IsNullOrEmpty(columnNamePattern))
+        {
+            sql += " AND COLUMN_NAME ILIKE ?";
+            binds.Add(columnNamePattern);
+        }
+        sql += " ORDER BY ORDINAL_POSITION";
 
-        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql))
+        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql, binds))
         {
             string? columnName = row["column_name"];
             if (columnName == null)
@@ -275,13 +297,14 @@ public sealed partial class SnowflakeConnection
         // Snowflake's INFORMATION_SCHEMA exposes TABLE_CONSTRAINTS but NOT KEY_COLUMN_USAGE,
         // so only constraint names/types are available here. Per-constraint column names and
         // FK column-usage would require SHOW PRIMARY/UNIQUE/IMPORTED KEYS + RESULT_SCAN.
+        var binds = new List<string?> { dbSchema, tableName };
         string sql = "SELECT CONSTRAINT_NAME::VARCHAR AS constraint_name, "
             + "CONSTRAINT_TYPE::VARCHAR AS constraint_type "
             + $"FROM {QuoteIdentifier(catalog)}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-            + $"WHERE TABLE_SCHEMA ILIKE '{Sanitize(dbSchema)}' AND TABLE_NAME ILIKE '{Sanitize(tableName)}' "
+            + "WHERE TABLE_SCHEMA ILIKE ? AND TABLE_NAME ILIKE ? "
             + "ORDER BY CONSTRAINT_NAME";
 
-        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql))
+        foreach (Dictionary<string, string?> row in RunMetadataQuery(sql, binds))
         {
             string? name = row["constraint_name"];
             if (name == null)
@@ -336,7 +359,7 @@ public sealed partial class SnowflakeConnection
     /// Runs a metadata query (whose columns are all cast to VARCHAR) and materializes
     /// the result rows as string dictionaries keyed by column name (case-insensitive).
     /// </summary>
-    private List<Dictionary<string, string?>> RunMetadataQuery(string sql)
+    private List<Dictionary<string, string?>> RunMetadataQuery(string sql, IReadOnlyList<string?>? bindValues = null)
     {
         if (_queryExecutor == null || _pooledConnection == null)
             throw new InvalidOperationException("Connection is not properly initialized.");
@@ -349,6 +372,18 @@ public sealed partial class SnowflakeConnection
             Timeout = _config.QueryTimeout,
             AuthToken = _pooledConnection.AuthToken
         };
+
+        // Bind the '?' placeholders as positional (1-based) bind variables. All metadata
+        // filter values are strings, so the bind type is TEXT. Server-side binding means a
+        // caller-supplied pattern can never be parsed as SQL.
+        if (bindValues != null)
+        {
+            for (int i = 0; i < bindValues.Count; i++)
+            {
+                request.Bindings[(i + 1).ToString(CultureInfo.InvariantCulture)] =
+                    new SnowflakeBinding(BindTypeNames.Text, bindValues[i]);
+            }
+        }
 
         var result = _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false).GetAwaiter().GetResult();
         if (result.Status == QueryStatus.Failed)
@@ -387,12 +422,6 @@ public sealed partial class SnowflakeConnection
 
     private static string? GetStringValue(IArrowArray array, int index) =>
         array is StringArray stringArray ? stringArray.GetString(index) : null;
-
-    /// <summary>Builds an optional "WHERE &lt;column&gt; ILIKE '&lt;pattern&gt;'" clause.</summary>
-    private static string IlikeWhere(string column, string? pattern) =>
-        string.IsNullOrEmpty(pattern) ? string.Empty : $" WHERE {column} ILIKE '{Sanitize(pattern!)}'";
-
-    private static string Sanitize(string value) => value.Replace("'", "''");
 
     private static string NormalizeTableType(string? informationSchemaType) =>
         string.Equals(informationSchemaType, "BASE TABLE", StringComparison.OrdinalIgnoreCase)

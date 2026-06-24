@@ -40,15 +40,16 @@ internal interface IRestApiClient
     /// <summary>
     /// Sends a POST request to the specified endpoint.
     /// </summary>
-    /// <typeparam name="T">The response type.</typeparam>
+    /// <typeparam name="TRequest">The request body type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
     /// <param name="endpoint">The API endpoint.</param>
     /// <param name="request">The request payload.</param>
     /// <param name="token">The authentication token.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The API response.</returns>
-    Task<ApiResponse<T>> PostAsync<T>(
+    Task<ApiResponse<TResponse>> PostAsync<TRequest, TResponse>(
         string endpoint,
-        object request,
+        TRequest request,
         AuthenticationToken token,
         CancellationToken cancellationToken = default);
 

@@ -27,13 +27,13 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Configuration settings for working with native Snowflake driver.
 /// Uses the same JSON format as Interop tests for compatibility.
 /// </summary>
-internal class SnowflakeTestConfiguration : TestConfiguration
+internal class IntegrationTestConfiguration : TestConfiguration
 {
     /// <summary>
     /// The Snowflake account.
@@ -87,7 +87,7 @@ internal class SnowflakeTestConfiguration : TestConfiguration
     /// The snowflake Authentication
     /// </summary>
     [JsonPropertyName("authentication")]
-    public SnowflakeAuthentication Authentication { get; set; } = new SnowflakeAuthentication();
+    public SnowflakeAuthentication Authentication { get; set; } = new();
 
     /// <summary>
     /// Whether to skip SSL certificate verification (e.g., for privatelink endpoints).

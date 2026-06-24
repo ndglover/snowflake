@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Apache.Arrow.Ipc;
 
 using Apache.Arrow;
@@ -113,9 +114,9 @@ internal class QueryRequest
     public ResultFormat Format { get; set; } = ResultFormat.ArrowV1;
 
     /// <summary>
-    /// Gets or sets the query parameters.
+    /// Gets or sets the positional bind variables for the statement's '?' placeholders.
     /// </summary>
-    public Dictionary<string, object> Parameters { get; set; } = new();
+    public Dictionary<string, SnowflakeBinding> Bindings { get; set; } = new();
 
     /// <summary>
     /// Gets or sets a value indicating whether this is a multi-statement query.

@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native;
 using Xunit;
 using Xunit.Abstractions;
@@ -30,7 +31,7 @@ using Xunit.Abstractions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Driver-level baseline tests for the native Snowflake driver, mirroring the
@@ -42,18 +43,19 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 ///
 /// Requires a live Snowflake instance; set SNOWFLAKE_TEST_CONFIG_FILE.
 /// </summary>
+[Trait("Category", "Integration")]
 public class DriverTests : IDisposable
 {
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfiguration;
+    private readonly IntegrationTestConfiguration _testConfiguration;
 
     public DriverTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfiguration = SnowflakeTestingUtils.TestConfiguration;
+        _testConfiguration = IntegrationTestingUtils.TestConfiguration;
 
         Skip.If(string.IsNullOrEmpty(_testConfiguration.Account),
-            $"Cannot execute test configuration from environment variable `{SnowflakeTestingUtils.SnowflakeTestConfigVariable}`");
+            $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
     }
 
     // ---- Implemented surface (expected to pass) ----
@@ -61,7 +63,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanConnect()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
 
@@ -69,21 +71,21 @@ public class DriverTests : IDisposable
     }
 
     [SkippableFact]
-    public void CanExecuteQuery()
+    public async Task CanExecuteQuery()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
         statement.SqlQuery = _testConfiguration.Query;
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
         Assert.NotNull(result);
         Assert.NotNull(result.Stream);
 
         using var stream = result.Stream;
-        var batch = stream.ReadNextRecordBatchAsync().Result;
+        var batch = await stream.ReadNextRecordBatchAsync();
 
         Assert.NotNull(batch);
         Assert.True(batch.Length > 0);
@@ -98,7 +100,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanGetQuerySchema()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
@@ -120,7 +122,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanExecuteUpdate()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
@@ -153,7 +155,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanGetInfo()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
 
@@ -164,7 +166,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanGetTableTypes()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
 
@@ -175,7 +177,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanGetTableSchema()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
 
@@ -190,7 +192,7 @@ public class DriverTests : IDisposable
     [SkippableFact]
     public void CanGetObjectsAll()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
 

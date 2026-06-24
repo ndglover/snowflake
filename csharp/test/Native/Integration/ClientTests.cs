@@ -33,7 +33,7 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Integration tests for the native Snowflake ADBC driver.
@@ -42,37 +42,38 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// Set the SNOWFLAKE_TEST_CONFIG_FILE environment variable to point to a JSON config file.
 /// The config file should use the same format as the Interop Snowflake tests.
 /// </summary>
+[Trait("Category", "Integration")]
 public class ClientTests : IDisposable
 {
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfiguration;
+    private readonly IntegrationTestConfiguration _testConfiguration;
 
     public ClientTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfiguration = SnowflakeTestingUtils.TestConfiguration;
+        _testConfiguration = IntegrationTestingUtils.TestConfiguration;
 
         Skip.If(string.IsNullOrEmpty(_testConfiguration.Account),
-            $"Cannot execute test configuration from environment variable `{SnowflakeTestingUtils.SnowflakeTestConfigVariable}`");
+            $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
     }
 
     [SkippableFact]
-    public void CanClientExecuteQuery()
+    public async Task CanClientExecuteQuery()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
         statement.SqlQuery = _testConfiguration.Query ?? "SELECT 1 as TESTCOL";
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
         Assert.NotNull(result);
         Assert.NotNull(result.Stream);
 
         using var stream = result.Stream;
-        var batch = stream.ReadNextRecordBatchAsync().Result;
+        var batch = await stream.ReadNextRecordBatchAsync();
 
         Assert.NotNull(batch);
         Assert.True(batch.Length > 0);
@@ -83,7 +84,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public async Task CanClientExecuteQueryAsync()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
         using var connection = await database.ConnectAsync(new Dictionary<string, string>());
@@ -107,7 +108,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public async Task CanClientExecuteQuery_WithAsyncConnect()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
         using var connection = await database.ConnectAsync(new Dictionary<string, string>());
@@ -131,7 +132,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public void CanClientExecuteUpdate()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
@@ -151,7 +152,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public async Task CanClientExecuteUpdate_WithAsyncConnect()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
         using var connection = await database.ConnectAsync(new Dictionary<string, string>());
@@ -171,7 +172,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public void CanClientGetSchema()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
@@ -199,7 +200,7 @@ public class ClientTests : IDisposable
     [SkippableFact]
     public async Task CanClientGetSchema_WithAsyncConnect()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
 
         using SnowflakeDatabase database = (SnowflakeDatabase)driver.Open(parameters);
         using var connection = await database.ConnectAsync(new Dictionary<string, string>());

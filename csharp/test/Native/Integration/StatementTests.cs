@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native;
 using Xunit;
 using Xunit.Abstractions;
@@ -30,7 +31,7 @@ using Xunit.Abstractions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 
-namespace AdbcDrivers.Snowflake.Native.Tests;
+namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
 /// <summary>
 /// Statement-level baseline tests for the native Snowflake driver, mirroring the
@@ -39,34 +40,35 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 ///
 /// Requires a live Snowflake instance; set SNOWFLAKE_TEST_CONFIG_FILE.
 /// </summary>
+[Trait("Category", "Integration")]
 public class StatementTests : IDisposable
 {
     private readonly ITestOutputHelper _output;
-    private readonly SnowflakeTestConfiguration _testConfiguration;
+    private readonly IntegrationTestConfiguration _testConfiguration;
 
     public StatementTests(ITestOutputHelper output)
     {
         _output = output;
-        _testConfiguration = SnowflakeTestingUtils.TestConfiguration;
+        _testConfiguration = IntegrationTestingUtils.TestConfiguration;
 
         Skip.If(string.IsNullOrEmpty(_testConfiguration.Account),
-            $"Cannot execute test configuration from environment variable `{SnowflakeTestingUtils.SnowflakeTestConfigVariable}`");
+            $"Cannot execute test configuration from environment variable `{IntegrationTestingUtils.SnowflakeTestConfigVariable}`");
     }
 
     [SkippableFact]
-    public void CanExecuteQuery()
+    public async Task CanExecuteQuery()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
         statement.SqlQuery = "SELECT 1 AS X, 'two' AS Y";
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
 
         Assert.NotNull(result.Stream);
         using var stream = result.Stream;
-        var batch = stream.ReadNextRecordBatchAsync().Result;
+        var batch = await stream.ReadNextRecordBatchAsync();
 
         Assert.NotNull(batch);
         Assert.Equal(2, batch.ColumnCount);
@@ -76,7 +78,7 @@ public class StatementTests : IDisposable
     [SkippableFact]
     public void ExecuteUpdateOnSelectReturnsNoRowCount()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
@@ -90,20 +92,22 @@ public class StatementTests : IDisposable
     }
 
     [SkippableFact]
-    public void GetParameterSchemaBeforePrepareThrows()
+    public void GetParameterSchema_IsNotSupported()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
-        Assert.Throws<InvalidOperationException>(() => statement.GetParameterSchema());
+        // Snowflake's protocol does not report bind-parameter types, so GetParameterSchema
+        // is unsupported regardless of whether the statement has been prepared.
+        Assert.Throws<NotImplementedException>(statement.GetParameterSchema);
     }
 
     [SkippableFact]
-    public void CanPrepareAndExecute()
+    public async Task CanPrepareAndExecute()
     {
-        var driver = SnowflakeTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
@@ -111,11 +115,11 @@ public class StatementTests : IDisposable
         statement.SqlQuery = "SELECT 1 AS X";
         statement.Prepare();
 
-        var result = statement.ExecuteQuery();
+        var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
 
         using var stream = result.Stream;
-        var batch = stream.ReadNextRecordBatchAsync().Result;
+        var batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
         Assert.Equal(1, batch.Length);
     }

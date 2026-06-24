@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native;
 using FluentAssertions;
 using Xunit;
@@ -32,6 +33,7 @@ using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Tests;
 
+[Trait("Category", "Unit")]
 public class SnowflakeDriverTests : IDisposable
 {
     private readonly SnowflakeDriver _driver;
@@ -47,7 +49,7 @@ public class SnowflakeDriverTests : IDisposable
     }
 
     [Fact]
-    public void OpenAsync_WithInvalidParameters_ShouldThrowArgumentException()
+    public async Task OpenAsync_WithInvalidParameters_ShouldThrowArgumentException()
     {
         // Arrange
         var parameters = new Dictionary<string, string>
@@ -59,7 +61,7 @@ public class SnowflakeDriverTests : IDisposable
         using SnowflakeDatabase database = (SnowflakeDatabase)_driver.Open(parameters);
 
         // Assert
-        var ex = Assert.Throws<ArgumentException>(() => database.ConnectAsync(null!).GetAwaiter().GetResult());
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => database.ConnectAsync(null!));
         ex.Message.Should().Contain("account");
     }
 

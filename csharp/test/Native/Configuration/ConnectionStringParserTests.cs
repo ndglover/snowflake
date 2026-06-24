@@ -31,6 +31,7 @@ using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Configuration;
 
+[Trait("Category", "Unit")]
 public class ConnectionStringParserTests
 {
     private static Dictionary<string, string> ParseConnectionString(string connectionString)

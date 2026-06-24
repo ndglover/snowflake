@@ -68,9 +68,9 @@ internal class RestApiClient : IRestApiClient
     }
 
     /// <inheritdoc/>
-    public async Task<ApiResponse<T>> PostAsync<T>(
+    public async Task<ApiResponse<TResponse>> PostAsync<TRequest, TResponse>(
         string endpoint,
-        object request,
+        TRequest request,
         AuthenticationToken token,
         CancellationToken cancellationToken = default)
     {
@@ -88,7 +88,7 @@ internal class RestApiClient : IRestApiClient
             var response = await _httpClient.SendAsync(requestMessage, cancellationToken);
             response.EnsureSuccessStatusCode();
 
-            return await ReadApiResponseAsync<T>(response, cancellationToken);
+            return await ReadApiResponseAsync<TResponse>(response, cancellationToken);
         }, cancellationToken);
     }
 
@@ -194,8 +194,7 @@ internal class RestApiClient : IRestApiClient
         request.Headers.Add("Authorization", authHeader);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/snowflake"));
 
-        // Add user agent - match Snowflake connector format to enable Arrow support
-        // Reference: snowflake-connector-net sends ".NET/{version}" as driver name
+        // User agent must be in the ".NET/{version}" form for the server to enable Arrow results.
         request.Headers.UserAgent.ParseAdd(".NET/1.0.0");
         request.Headers.UserAgent.ParseAdd("(Windows)");
         request.Headers.UserAgent.ParseAdd(".NETCoreApp/8.0");

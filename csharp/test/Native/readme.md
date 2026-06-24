@@ -1,17 +1,23 @@
 # Native Snowflake ADBC Driver — Tests
 
 Tests for the native C# Snowflake ADBC driver (`AdbcDrivers.Snowflake.Native`). The
-suite splits into two tiers:
+suite splits into two tiers, separated both by **folder** and by an xUnit **trait**:
 
-- **Offline unit tests** — no network, no credentials; run everywhere (CI included).
-- **Integration tests** — exercise a *live* Snowflake account; written as
-  `[SkippableFact]`/`[SkippableTheory]` so they **skip automatically** when no
+- **Unit tests** — no network, no credentials; run everywhere (CI included). They live in
+  the project root (plus `Configuration/`) and are tagged `[Trait("Category", "Unit")]`.
+- **Integration tests** — exercise a *live* Snowflake account; they live under
+  `Integration/` and are tagged `[Trait("Category", "Integration")]`. They are also written
+  as `[SkippableFact]`/`[SkippableTheory]`, so they **skip automatically** when no
   configuration is present instead of failing.
 
 ```
+dotnet test --filter "Category=Unit"          # offline only — no account needed
+dotnet test --filter "Category=Integration"   # live — needs SNOWFLAKE_TEST_CONFIG_FILE
 dotnet test                                   # everything (integration skips if unconfigured)
-dotnet test --filter "Category=offline"       # not used — see filters below
 ```
+
+**Adding a test:** put offline tests in the root and tag them `Category=Unit`; put tests
+that need a live account under `Integration/` and tag them `Category=Integration`.
 
 ---
 
@@ -77,7 +83,7 @@ the regression net for the protocol/encoding code.
 
 Configuration is loaded from a **JSON file** pointed to by the
 `SNOWFLAKE_TEST_CONFIG_FILE` environment variable. (The per-variable
-`SNOWFLAKE_*` env-var loader exists in `SnowflakeTestingUtils` but is currently
+`SNOWFLAKE_*` env-var loader exists in `IntegrationTestingUtils` but is currently
 disabled because it does not populate the `metadata.*` block the metadata tests need.)
 
 **1. Create a config file** (keep it outside the repo — it holds secrets):
@@ -130,11 +136,14 @@ both drivers (the native driver just ignores `driverPath`/`driverEntryPoint`).
 ## Running
 
 ```bash
-# Offline unit tests only (no account needed)
-dotnet test --filter "FullyQualifiedName~TypeConverterTests|FullyQualifiedName~RequestBuilderTests|FullyQualifiedName~SnowflakeAccountUrlTests|FullyQualifiedName~QueryExecutorTests|FullyQualifiedName~ConnectionStringParserTests|FullyQualifiedName~SnowflakeDriverTests"
+# Unit tests only (no account needed)
+dotnet test --filter "Category=Unit"
 
-# A single integration suite (set SNOWFLAKE_TEST_CONFIG_FILE first)
-dotnet test --filter "FullyQualifiedName~SampleDataTests"
+# All integration tests (set SNOWFLAKE_TEST_CONFIG_FILE first)
+dotnet test --filter "Category=Integration"
+
+# A single integration suite
+dotnet test --filter "Category=Integration & FullyQualifiedName~SampleDataTests"
 
 # Everything — integration tests skip automatically if SNOWFLAKE_TEST_CONFIG_FILE is unset
 dotnet test

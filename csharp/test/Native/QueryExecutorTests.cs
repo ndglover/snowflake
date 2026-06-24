@@ -31,6 +31,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// Offline unit tests for <see cref="QueryExecutor"/> result classification, especially
 /// the DML affected-row detection that parses the JSON row-count summary.
 /// </summary>
+[Trait("Category", "Unit")]
 public class QueryExecutorTests
 {
     private static SnowflakeQueryResponse Response(string[] columnNames, params string[][] rows)
@@ -41,7 +42,7 @@ public class QueryExecutorTests
 
         var rowSet = new List<List<string>>();
         foreach (string[] row in rows)
-            rowSet.Add(new List<string>(row));
+            rowSet.Add([..row]);
 
         return new SnowflakeQueryResponse { RowType = rowType, RowSet = rowSet };
     }
@@ -49,7 +50,7 @@ public class QueryExecutorTests
     [Fact]
     public void TryGetDmlAffectedRows_Insert_ReturnsCount()
     {
-        SnowflakeQueryResponse data = Response(new[] { "number of rows inserted" }, new[] { "2" });
+        SnowflakeQueryResponse data = Response(["number of rows inserted"], ["2"]);
 
         Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(2, affected);
@@ -59,8 +60,8 @@ public class QueryExecutorTests
     public void TryGetDmlAffectedRows_Merge_SumsAllCountColumns()
     {
         SnowflakeQueryResponse data = Response(
-            new[] { "number of rows inserted", "number of rows updated" },
-            new[] { "3", "2" });
+            ["number of rows inserted", "number of rows updated"],
+            ["3", "2"]);
 
         Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(5, affected);
@@ -70,7 +71,7 @@ public class QueryExecutorTests
     public void TryGetDmlAffectedRows_ReadsRowSetNotReturnedCount()
     {
         // A DELETE affecting 5 rows: RowSet carries 5 even though the payload is a single row.
-        SnowflakeQueryResponse data = Response(new[] { "number of rows deleted" }, new[] { "5" });
+        SnowflakeQueryResponse data = Response(["number of rows deleted"], ["5"]);
         data.Returned = 1;
 
         Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
@@ -80,7 +81,7 @@ public class QueryExecutorTests
     [Fact]
     public void TryGetDmlAffectedRows_NonDmlColumns_ReturnsFalse()
     {
-        SnowflakeQueryResponse data = Response(new[] { "MY_COLUMN" }, new[] { "1" });
+        SnowflakeQueryResponse data = Response(["MY_COLUMN"], ["1"]);
 
         Assert.False(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(0, affected);

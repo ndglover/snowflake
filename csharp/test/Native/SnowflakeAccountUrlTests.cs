@@ -30,6 +30,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// <summary>
 /// Offline unit tests for <see cref="SnowflakeAccountUrl"/> URL building.
 /// </summary>
+[Trait("Category", "Unit")]
 public class SnowflakeAccountUrlTests
 {
     [Fact]

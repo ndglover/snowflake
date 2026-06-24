@@ -31,42 +31,43 @@ namespace AdbcDrivers.Snowflake.Native.Tests;
 /// <summary>
 /// Offline unit tests for <see cref="RequestBuilder"/> request-body construction.
 /// </summary>
+[Trait("Category", "Unit")]
 public class RequestBuilderTests
 {
-    private static Dictionary<string, object> BuildQuery(
+    private static SnowflakeQueryRequestBody BuildQuery(
         string statement,
         string? database = null,
         string? schema = null,
         string? warehouse = null,
         string? role = null,
         int? timeout = null,
-        Dictionary<string, object>? parameters = null,
+        Dictionary<string, SnowflakeBinding>? bindings = null,
         bool isMultiStatement = false,
         bool describeOnly = false)
-        => (Dictionary<string, object>)RequestBuilder.BuildQueryRequest(
-            statement, database, schema, warehouse, role, timeout, parameters, isMultiStatement, describeOnly);
+        => RequestBuilder.BuildQueryRequest(
+            statement, database, schema, warehouse, role, timeout, bindings, isMultiStatement, describeOnly);
 
     [Fact]
     public void BuildQueryRequest_SetsCoreFieldsAndRequestsArrow()
     {
-        Dictionary<string, object> request = BuildQuery("SELECT 1");
+        SnowflakeQueryRequestBody request = BuildQuery("SELECT 1");
 
-        Assert.Equal("SELECT 1", request["sqlText"]);
-        Assert.False((bool)request["asyncExec"]);
-        Assert.False((bool)request["describeOnly"]);
-        Assert.False(request.ContainsKey("bindings"));
+        Assert.Equal("SELECT 1", request.SqlText);
+        Assert.False(request.AsyncExec);
+        Assert.False(request.DescribeOnly);
+        Assert.Null(request.Bindings);
 
-        var parameters = (Dictionary<string, string>)request["parameters"];
-        Assert.Equal("ARROW", parameters["DOTNET_QUERY_RESULT_FORMAT"]);
+        Assert.NotNull(request.Parameters);
+        Assert.Equal("ARROW", request.Parameters!["DOTNET_QUERY_RESULT_FORMAT"]);
     }
 
     [Fact]
     public void BuildQueryRequest_IncludesSessionParameters()
     {
-        Dictionary<string, object> request = BuildQuery(
+        SnowflakeQueryRequestBody request = BuildQuery(
             "SELECT 1", database: "DB", schema: "SC", warehouse: "WH", role: "R", timeout: 30);
 
-        var parameters = (Dictionary<string, string>)request["parameters"];
+        var parameters = request.Parameters!;
         Assert.Equal("DB", parameters["DATABASE"]);
         Assert.Equal("SC", parameters["SCHEMA"]);
         Assert.Equal("WH", parameters["WAREHOUSE"]);
@@ -77,26 +78,27 @@ public class RequestBuilderTests
     [Fact]
     public void BuildQueryRequest_DescribeOnly_SetsFlag()
     {
-        Dictionary<string, object> request = BuildQuery("SELECT 1", describeOnly: true);
-        Assert.True((bool)request["describeOnly"]);
+        SnowflakeQueryRequestBody request = BuildQuery("SELECT 1", describeOnly: true);
+        Assert.True(request.DescribeOnly);
     }
 
     [Fact]
     public void BuildQueryRequest_WithBindings_IncludesThem()
     {
-        var bindings = new Dictionary<string, object> { ["1"] = "x" };
-        Dictionary<string, object> request = BuildQuery("SELECT ?", parameters: bindings);
+        var bindings = new Dictionary<string, SnowflakeBinding> { ["1"] = new("TEXT", "x") };
+        SnowflakeQueryRequestBody request = BuildQuery("SELECT ?", bindings: bindings);
 
-        Assert.True(request.ContainsKey("bindings"));
-        Assert.Same(bindings, request["bindings"]);
+        Assert.NotNull(request.Bindings);
+        Assert.Same(bindings, request.Bindings);
+        Assert.Equal("TEXT", request.Bindings!["1"].Type);
+        Assert.Equal("x", request.Bindings!["1"].Value);
     }
 
     [Fact]
     public void BuildQueryRequest_MultiStatement_SetsCount()
     {
-        Dictionary<string, object> request = BuildQuery("SELECT 1; SELECT 2", isMultiStatement: true);
-        var parameters = (Dictionary<string, string>)request["parameters"];
-        Assert.Equal("0", parameters["MULTI_STATEMENT_COUNT"]);
+        SnowflakeQueryRequestBody request = BuildQuery("SELECT 1; SELECT 2", isMultiStatement: true);
+        Assert.Equal("0", request.Parameters!["MULTI_STATEMENT_COUNT"]);
     }
 
     [Fact]
@@ -108,8 +110,8 @@ public class RequestBuilderTests
     [Fact]
     public void BuildCancelRequest_SetsQueryId()
     {
-        var request = (Dictionary<string, object>)RequestBuilder.BuildCancelRequest("query-123");
-        Assert.Equal("query-123", request["queryId"]);
+        SnowflakeCancelRequestBody request = RequestBuilder.BuildCancelRequest("query-123");
+        Assert.Equal("query-123", request.QueryId);
     }
 
     [Fact]
@@ -121,16 +123,16 @@ public class RequestBuilderTests
     [Fact]
     public void BuildMetadataRequest_SetsTypeAndFilters()
     {
-        var request = (Dictionary<string, object>)RequestBuilder.BuildMetadataRequest(
+        SnowflakeMetadataRequestBody request = RequestBuilder.BuildMetadataRequest(
             "tables", databasePattern: "DB", schemaPattern: "SC", tablePattern: "T",
-            columnPattern: "C", tableTypes: new[] { "TABLE", "VIEW" });
+            columnPattern: "C", tableTypes: ["TABLE", "VIEW"]);
 
-        Assert.Equal("tables", request["type"]);
-        Assert.Equal("DB", request["database"]);
-        Assert.Equal("SC", request["schema"]);
-        Assert.Equal("T", request["table"]);
-        Assert.Equal("C", request["column"]);
-        Assert.Equal(new[] { "TABLE", "VIEW" }, (string[])request["tableTypes"]);
+        Assert.Equal("tables", request.Type);
+        Assert.Equal("DB", request.Database);
+        Assert.Equal("SC", request.Schema);
+        Assert.Equal("T", request.Table);
+        Assert.Equal("C", request.Column);
+        Assert.Equal(new[] { "TABLE", "VIEW" }, request.TableTypes);
     }
 
     [Fact]

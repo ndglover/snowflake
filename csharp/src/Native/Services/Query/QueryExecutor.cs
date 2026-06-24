@@ -90,7 +90,7 @@ internal class QueryExecutor : IQueryExecutor
         try
         {
             var queryRequest = BuildQueryRequest(request, out string endpoint);
-            var response = await _apiClient.PostAsync<SnowflakeQueryResponse>(
+            var response = await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
                 endpoint,
                 queryRequest,
                 authToken,
@@ -262,7 +262,7 @@ internal class QueryExecutor : IQueryExecutor
         // described (compiled without executing) by sending it to the query-request endpoint
         // with describeOnly=true. The response's rowtype is the result schema.
         var describeRequest = BuildQueryRequest(request, out string endpoint, describeOnly: true);
-        var response = await _apiClient.PostAsync<SnowflakeQueryResponse>(
+        var response = await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
             endpoint,
             describeRequest,
             request.AuthToken,
@@ -276,7 +276,7 @@ internal class QueryExecutor : IQueryExecutor
             StatementHandle = response.Data.QueryId ?? string.Empty,
             Statement = request.Statement,
             // describeOnly returns the result columns (rowtype) but not bind/parameter
-            // metadata, so ParameterSchema is left null (matches gosnowflake behavior).
+            // metadata, so ParameterSchema is left null.
             ParameterSchema = null,
             ResultSchema = BuildSchemaFromRowType(response.Data.RowType)
         };
@@ -308,7 +308,7 @@ internal class QueryExecutor : IQueryExecutor
         return new Schema(fields, null);
     }
 
-    private object BuildQueryRequest(QueryRequest request, out string endpoint, bool describeOnly = false)
+    private SnowflakeQueryRequestBody BuildQueryRequest(QueryRequest request, out string endpoint, bool describeOnly = false)
     {
         var queryRequest = RequestBuilder.BuildQueryRequest(
             request.Statement,
@@ -317,7 +317,7 @@ internal class QueryExecutor : IQueryExecutor
             request.Warehouse,
             request.Role,
             (int)request.Timeout.TotalSeconds,
-            request.Parameters,
+            request.Bindings,
             request.IsMultiStatement,
             describeOnly);
 
@@ -343,8 +343,9 @@ internal class QueryExecutor : IQueryExecutor
         var request = new QueryRequest
         {
             Statement = statement.Statement,
-            Parameters = parameters.Parameters
         };
+        foreach (var kvp in parameters.Parameters)
+            request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
 
         return await ExecuteQueryAsync(request, cancellationToken);
     }

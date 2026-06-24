@@ -127,10 +127,16 @@ public class ClientTests
         Assert.Equal("alpha", reader.GetString(1));                  // VARCHAR
         Assert.True(Convert.ToBoolean(reader.GetValue(2)));          // BOOLEAN
         Assert.Equal(3.5, Convert.ToDouble(reader.GetValue(3)), 5);  // FLOAT
-        // NOTE: PRICE (column 4) is a scaled NUMBER(10,2) and is intentionally NOT asserted
-        // here. Scaled-decimal result values currently come back unscaled (9.99 -> 999) --
-        // the result decoder does not apply the column's scale. Tracked as a known bug; once
-        // fixed, assert: Assert.Equal(9.99, Convert.ToDouble(reader.GetValue(4)), 2).
+
+        // NUMBER(10,2): the driver rescales the raw 999 to a Decimal128 (9.99); the client
+        // surfaces a Decimal128 as SqlDecimal (it holds the full NUMBER(38) range that the
+        // CLR decimal cannot).
+        object price = reader.GetValue(4);
+        decimal priceValue = price is System.Data.SqlTypes.SqlDecimal sqlDecimal
+            ? sqlDecimal.Value
+            : Convert.ToDecimal(price);
+        Assert.Equal(9.99m, priceValue);
+
         Assert.False(reader.Read());
     }
 

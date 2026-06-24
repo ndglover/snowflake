@@ -238,12 +238,16 @@ internal class QueryExecutor : IQueryExecutor
             data.Qrmk,
             cancellationToken).ConfigureAwait(false);
 
+        // Apply Snowflake-specific result fixups (e.g. rescaling FIXED-with-scale integer
+        // columns to Decimal128) before exposing the stream.
+        var resultStream = new SnowflakeResultArrowStream(arrayStream);
+
         return new QueryResult
         {
             StatementHandle = data.QueryId ?? string.Empty,
             Status = QueryStatus.Success,
-            Schema = arrayStream.Schema,
-            ResultStream = arrayStream,
+            Schema = resultStream.Schema,
+            ResultStream = resultStream,
             RowCount = data.Returned ?? 0,
             ExecutionTime = executionTime
         };

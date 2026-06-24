@@ -125,6 +125,26 @@ public class QueryAndMetadataTests
     }
 
     [SkippableFact]
+    public async Task Query_ScaledNumber_DecodesWithScale()
+    {
+        using var connection = Connect();
+        using var statement = connection.CreateStatement();
+
+        // Snowflake sends a scaled NUMBER as an integer (999) with the scale in field metadata;
+        // the driver must rescale it to a Decimal128 so the real value (9.99) comes through.
+        statement.SqlQuery = "SELECT 9.99::NUMBER(10,2) AS P";
+        var result = await statement.ExecuteQueryAsync();
+
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream!;
+        var batch = await stream.ReadNextRecordBatchAsync();
+
+        Assert.NotNull(batch);
+        var column = Assert.IsType<Decimal128Array>(batch!.Column(0));
+        Assert.Equal(9.99m, column.GetValue(0));
+    }
+
+    [SkippableFact]
     public void Query_InvalidSql_ThrowsAdbcException()
     {
         using var connection = Connect();

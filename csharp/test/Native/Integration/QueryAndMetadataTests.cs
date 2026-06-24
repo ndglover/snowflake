@@ -51,7 +51,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 /// when no account is configured.
 /// </summary>
 [Trait("Category", "Integration")]
-public class QueryAndMetadataTests : IDisposable
+public class QueryAndMetadataTests
 {
     // SNOWFLAKE_SAMPLE_DATA is shared into every account by default and is read-only,
     // so these identifiers and the row counts below are stable reference points.
@@ -363,9 +363,5 @@ public class QueryAndMetadataTests : IDisposable
         }
 
         return -1;
-    }
-
-    public void Dispose()
-    {
     }
 }

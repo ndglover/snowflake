@@ -55,20 +55,9 @@ internal sealed class SnowflakeQueryRequestBody
 /// <summary>
 /// A single bound parameter value with its Snowflake data type (see <see cref="BindTypeNames"/>).
 /// </summary>
-internal sealed class SnowflakeBinding
-{
-    public SnowflakeBinding(string type, object? value)
-    {
-        Type = type;
-        Value = value;
-    }
-
-    [JsonPropertyName("type")]
-    public string Type { get; }
-
-    [JsonPropertyName("value")]
-    public object? Value { get; }
-}
+internal sealed record SnowflakeBinding(
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("value")] object? Value);
 
 /// <summary>
 /// Request body for cancelling a running query.

@@ -55,4 +55,7 @@ internal static class SessionParameterValues
 internal static class BindTypeNames
 {
     public const string Text = "TEXT";
+    public const string Fixed = "FIXED";
+    public const string Real = "REAL";
+    public const string Boolean = "BOOLEAN";
 }

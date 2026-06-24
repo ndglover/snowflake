@@ -24,10 +24,8 @@
 using System;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
-using AdbcDrivers.Snowflake.Native.Services;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 using AdbcDrivers.Snowflake.Native.Services.Query;
-using AdbcDrivers.Snowflake.Native.Services.Transport;
 using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 using Apache.Arrow;
@@ -76,11 +74,8 @@ public sealed class SnowflakeStatement : AdbcStatement
     {
         ThrowIfDisposed();
 
-        if (batch == null)
-            throw new ArgumentNullException(nameof(batch));
-
-        if (schema == null)
-            throw new ArgumentNullException(nameof(schema));
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(schema);
 
         _boundParameters = batch;
     }
@@ -125,10 +120,7 @@ public sealed class SnowflakeStatement : AdbcStatement
             {
                 var parameterSet = _typeConverter.ConvertArrowBatchToParameters(_boundParameters);
                 foreach (var kvp in parameterSet.Parameters)
-                {
-                    if (kvp.Value != null)
-                        request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
-                }
+                    request.Bindings[kvp.Key] = kvp.Value;
             }
 
             // Execute query
@@ -199,10 +191,7 @@ public sealed class SnowflakeStatement : AdbcStatement
             {
                 var parameterSet = _typeConverter.ConvertArrowBatchToParameters(_boundParameters);
                 foreach (var kvp in parameterSet.Parameters)
-                {
-                    if (kvp.Value != null)
-                        request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
-                }
+                    request.Bindings[kvp.Key] = kvp.Value;
             }
 
             // Execute update

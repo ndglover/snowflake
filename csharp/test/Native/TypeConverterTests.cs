@@ -179,7 +179,7 @@ public class TypeConverterTests
     // ---- ConvertArrowBatchToParameters ----
 
     [Fact]
-    public void ConvertArrowBatchToParameters_UsesFirstRowValuesKeyedByFieldName()
+    public void ConvertArrowBatchToParameters_KeysBindingsPositionallyWithTypes()
     {
         var schema = new Schema(
             [new Field("A", Int64Type.Default, true), new Field("B", StringType.Default, true)],
@@ -190,9 +190,13 @@ public class TypeConverterTests
 
         var result = _converter.ConvertArrowBatchToParameters(batch);
 
+        // Keyed by 1-based placeholder position (matching '?'), not by column name, with the
+        // Snowflake bind type mapped from the Arrow type.
         Assert.Equal(2, result.Parameters.Count);
-        Assert.Equal(42L, result.Parameters["A"]);
-        Assert.Equal("hello", result.Parameters["B"]);
+        Assert.Equal("FIXED", result.Parameters["1"].Type);
+        Assert.Equal("42", result.Parameters["1"].Value);
+        Assert.Equal("TEXT", result.Parameters["2"].Type);
+        Assert.Equal("hello", result.Parameters["2"].Value);
     }
 
     [Fact]

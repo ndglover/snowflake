@@ -44,7 +44,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 /// Requires a live Snowflake instance; set SNOWFLAKE_TEST_CONFIG_FILE.
 /// </summary>
 [Trait("Category", "Integration")]
-public class DriverTests : IDisposable
+public class DriverTests
 {
     private readonly ITestOutputHelper _output;
     private readonly IntegrationTestConfiguration _testConfiguration;
@@ -205,9 +205,5 @@ public class DriverTests : IDisposable
             null);
 
         Assert.NotNull(stream);
-    }
-
-    public void Dispose()
-    {
     }
 }

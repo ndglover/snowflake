@@ -21,18 +21,19 @@
 * limitations under the License.
 */
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
+using System.Collections.Generic;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 
 namespace AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 /// <summary>
-/// Represents a parameter set for Snowflake query execution.
+/// Represents a set of positional bind variables for Snowflake query execution, keyed by
+/// 1-based placeholder position ("1", "2", ...) to match the '?' placeholders in the SQL.
 /// </summary>
 internal class ParameterSet
 {
     /// <summary>
-    /// Gets or sets the parameters.
+    /// Gets or sets the bind variables, keyed by 1-based placeholder position.
     /// </summary>
-    public System.Collections.Generic.Dictionary<string, object?> Parameters { get; set; } = new();
+    public Dictionary<string, SnowflakeBinding> Parameters { get; init; } = new();
 }

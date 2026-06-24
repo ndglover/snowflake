@@ -24,12 +24,11 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using AdbcDrivers.Snowflake.Native;
 using Xunit;
 using Xunit.Abstractions;
 
 using Apache.Arrow;
-using Apache.Arrow.Adbc;
+using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
@@ -41,7 +40,7 @@ namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 /// Requires a live Snowflake instance; set SNOWFLAKE_TEST_CONFIG_FILE.
 /// </summary>
 [Trait("Category", "Integration")]
-public class StatementTests : IDisposable
+public class StatementTests
 {
     private readonly ITestOutputHelper _output;
     private readonly IntegrationTestConfiguration _testConfiguration;
@@ -124,7 +123,54 @@ public class StatementTests : IDisposable
         Assert.Equal(1, batch.Length);
     }
 
-    public void Dispose()
+    [SkippableFact]
+    public async Task CanBindTextParameter()
     {
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+
+        statement.SqlQuery = "SELECT ? AS V";
+
+        // The bind column is deliberately NOT named "1": the driver binds by position, not name.
+        var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
+        var values = new StringArray.Builder().Append("hello").Build();
+        using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
+        statement.Bind(batch, schema);
+
+        var result = await statement.ExecuteQueryAsync();
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream!;
+        var read = await stream.ReadNextRecordBatchAsync();
+
+        Assert.NotNull(read);
+        Assert.Equal("hello", ((StringArray)read!.Column(0)).GetString(0));
+    }
+
+    [SkippableFact]
+    public async Task CanBindNumericParameter()
+    {
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+
+        // 'ok' returns only if the bound value is correctly compared as the number 42.
+        statement.SqlQuery = "SELECT 'ok' AS V WHERE ? = 42";
+
+        var schema = new Schema(new[] { new Field("n", Int64Type.Default, true) }, null);
+        var values = new Int64Array.Builder().Append(42).Build();
+        using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
+        statement.Bind(batch, schema);
+
+        var result = await statement.ExecuteQueryAsync();
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream!;
+        var read = await stream.ReadNextRecordBatchAsync();
+
+        Assert.NotNull(read);
+        Assert.Equal(1, read!.Length);
+        Assert.Equal("ok", ((StringArray)read.Column(0)).GetString(0));
     }
 }

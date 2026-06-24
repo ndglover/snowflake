@@ -23,11 +23,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Apache.Arrow.Types;
 
 using Apache.Arrow;
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
@@ -39,8 +40,7 @@ internal class TypeConverter : ITypeConverter
     /// <inheritdoc/>
     public IArrowType ConvertSnowflakeTypeToArrow(SnowflakeDataType snowflakeType)
     {
-        if (snowflakeType == null)
-            throw new ArgumentNullException(nameof(snowflakeType));
+        ArgumentNullException.ThrowIfNull(snowflakeType);
 
         return snowflakeType.TypeCode switch
         {
@@ -89,8 +89,7 @@ internal class TypeConverter : ITypeConverter
     /// <inheritdoc/>
     public SnowflakeDataType ConvertArrowTypeToSnowflake(IArrowType arrowType)
     {
-        if (arrowType == null)
-            throw new ArgumentNullException(nameof(arrowType));
+        ArgumentNullException.ThrowIfNull(arrowType);
 
         return arrowType switch
         {
@@ -125,8 +124,8 @@ internal class TypeConverter : ITypeConverter
 
             Time32Type or Time64Type => new SnowflakeDataType { TypeName = "TIME" },
 
-            TimestampType timestamp when timestamp.Timezone == null => new SnowflakeDataType { TypeName = "TIMESTAMP_NTZ" },
-            TimestampType timestamp when timestamp.Timezone == "UTC" => new SnowflakeDataType { TypeName = "TIMESTAMP_LTZ" },
+            TimestampType { Timezone: null } => new SnowflakeDataType { TypeName = "TIMESTAMP_NTZ" },
+            TimestampType { Timezone: "UTC" } => new SnowflakeDataType { TypeName = "TIMESTAMP_LTZ" },
             TimestampType timestamp => new SnowflakeDataType { TypeName = "TIMESTAMP_TZ", Timezone = timestamp.Timezone },
 
             ListType => new SnowflakeDataType { TypeName = "ARRAY" },
@@ -140,8 +139,7 @@ internal class TypeConverter : ITypeConverter
     /// <inheritdoc/>
     public RecordBatch ConvertSnowflakeResultToArrow(SnowflakeResultSet resultSet)
     {
-        if (resultSet == null)
-            throw new ArgumentNullException(nameof(resultSet));
+        ArgumentNullException.ThrowIfNull(resultSet);
 
         if (resultSet.Columns.Length == 0)
             throw new ArgumentException("Result set must have at least one column.", nameof(resultSet));
@@ -156,7 +154,7 @@ internal class TypeConverter : ITypeConverter
         // Build arrays for each column
         var arrays = new IArrowArray[resultSet.Columns.Length];
 
-        for (int colIndex = 0; colIndex < resultSet.Columns.Length; colIndex++)
+        for (var colIndex = 0; colIndex < resultSet.Columns.Length; colIndex++)
         {
             var column = resultSet.Columns[colIndex];
             var columnData = resultSet.Rows.Select(row => row[colIndex]).ToArray();
@@ -173,20 +171,39 @@ internal class TypeConverter : ITypeConverter
         if (batch == null)
             throw new ArgumentNullException(nameof(batch));
 
-        var parameters = new Dictionary<string, object?>();
+        var parameters = new Dictionary<string, SnowflakeBinding>();
 
-        for (int i = 0; i < batch.Schema.FieldsList.Count; i++)
+        if (batch.Length > 0)
         {
-            var field = batch.Schema.FieldsList[i];
-            var array = batch.Column(i);
-
-            if (batch.Length > 0)
+            for (var i = 0; i < batch.Schema.FieldsList.Count; i++)
             {
-                parameters[field.Name] = GetValueFromArray(array, 0);
+                // Snowflake binds '?' placeholders positionally: each column is the parameter
+                // at its 1-based ordinal, keyed "1", "2", ... (not by column name). The first
+                // row supplies the value.
+                var key = (i + 1).ToString(CultureInfo.InvariantCulture);
+                parameters[key] = ToBinding(batch.Column(i), 0);
             }
         }
 
         return new ParameterSet { Parameters = parameters };
+    }
+
+    /// <summary>
+    /// Converts a single Arrow array value into a Snowflake bind variable (type + string value).
+    /// </summary>
+    private SnowflakeBinding ToBinding(IArrowArray array, int index)
+    {
+        object? value = GetValueFromArray(array, index);
+
+        return value switch
+        {
+            null => new SnowflakeBinding(BindTypeNames.Text, null),
+            bool b => new SnowflakeBinding(BindTypeNames.Boolean, b ? "true" : "false"),
+            sbyte or short or int or long => new SnowflakeBinding(BindTypeNames.Fixed, Convert.ToString(value, CultureInfo.InvariantCulture)),
+            float or double => new SnowflakeBinding(BindTypeNames.Real, Convert.ToString(value, CultureInfo.InvariantCulture)),
+            string s => new SnowflakeBinding(BindTypeNames.Text, s),
+            _ => new SnowflakeBinding(BindTypeNames.Text, Convert.ToString(value, CultureInfo.InvariantCulture))
+        };
     }
 
     private IArrowArray BuildArrowArray(SnowflakeDataType dataType, object?[] values)
@@ -301,12 +318,17 @@ internal class TypeConverter : ITypeConverter
         var builder = new BinaryArray.Builder();
         foreach (var value in values)
         {
-            if (value == null)
-                builder.AppendNull();
-            else if (value is byte[] bytes)
-                builder.Append(bytes);
-            else
-                throw new InvalidOperationException($"Cannot convert {value.GetType()} to binary.");
+            switch (value)
+            {
+                case null:
+                    builder.AppendNull();
+                    break;
+                case byte[] bytes:
+                    builder.Append(bytes);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Cannot convert {value.GetType()} to binary.");
+            }
         }
         return builder.Build();
     }
@@ -316,14 +338,21 @@ internal class TypeConverter : ITypeConverter
         var builder = new Date32Array.Builder();
         foreach (var value in values)
         {
-            if (value == null)
-                builder.AppendNull();
-            else if (value is DateTime dateTime)
-                builder.Append(dateTime);
-            else if (value is DateTimeOffset dateTimeOffset)
-                builder.Append(dateTimeOffset.DateTime);
-            else
-                builder.Append(Convert.ToDateTime(value));
+            switch (value)
+            {
+                case null:
+                    builder.AppendNull();
+                    break;
+                case DateTime dateTime:
+                    builder.Append(dateTime);
+                    break;
+                case DateTimeOffset dateTimeOffset:
+                    builder.Append(dateTimeOffset.DateTime);
+                    break;
+                default:
+                    builder.Append(Convert.ToDateTime(value));
+                    break;
+            }
         }
         return builder.Build();
     }
@@ -333,12 +362,17 @@ internal class TypeConverter : ITypeConverter
         var builder = new Time64Array.Builder(Time64Type.Nanosecond);
         foreach (var value in values)
         {
-            if (value == null)
-                builder.AppendNull();
-            else if (value is TimeSpan timeSpan)
-                builder.Append(timeSpan.Ticks * 100); // Convert to nanoseconds
-            else
-                throw new InvalidOperationException($"Cannot convert {value.GetType()} to time.");
+            switch (value)
+            {
+                case null:
+                    builder.AppendNull();
+                    break;
+                case TimeSpan timeSpan:
+                    builder.Append(timeSpan.Ticks * 100); // Convert to nanoseconds
+                    break;
+                default:
+                    throw new InvalidOperationException($"Cannot convert {value.GetType()} to time.");
+            }
         }
         return builder.Build();
     }

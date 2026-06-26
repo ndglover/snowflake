@@ -123,19 +123,18 @@ public class ClientTests
         using var reader = command.ExecuteReader();
 
         Assert.True(reader.Read());
-        Assert.Equal(1, Convert.ToInt32(reader.GetValue(0)));        // NUMBER(38,0)
-        Assert.Equal("alpha", reader.GetString(1));                  // VARCHAR
-        Assert.True(Convert.ToBoolean(reader.GetValue(2)));          // BOOLEAN
-        Assert.Equal(3.5, Convert.ToDouble(reader.GetValue(3)), 5);  // FLOAT
+
+        // NUMBER(38,0): Snowflake's INT/NUMBER default precision (38) exceeds Int64, so the driver
+        // sizes it to Decimal128, which the client surfaces as SqlDecimal — read it like PRICE.
+        Assert.Equal(1m, ToDecimal(reader.GetValue(0)));            // NUMBER(38,0)
+        Assert.Equal("alpha", reader.GetString(1));                 // VARCHAR
+        Assert.True(Convert.ToBoolean(reader.GetValue(2)));         // BOOLEAN
+        Assert.Equal(3.5, Convert.ToDouble(reader.GetValue(3)), 5); // FLOAT
 
         // NUMBER(10,2): the driver rescales the raw 999 to a Decimal128 (9.99); the client
         // surfaces a Decimal128 as SqlDecimal (it holds the full NUMBER(38) range that the
         // CLR decimal cannot).
-        object price = reader.GetValue(4);
-        decimal priceValue = price is System.Data.SqlTypes.SqlDecimal sqlDecimal
-            ? sqlDecimal.Value
-            : Convert.ToDecimal(price);
-        Assert.Equal(9.99m, priceValue);
+        Assert.Equal(9.99m, ToDecimal(reader.GetValue(4)));        // NUMBER(10,2)
 
         Assert.False(reader.Read());
     }
@@ -197,6 +196,14 @@ public class ClientTests
         _output.WriteLine($"ExecuteNonQuery reported {affected} affected rows");
         Assert.Equal(2, affected);
     }
+
+    /// <summary>
+    /// Reads a numeric CLR value as a decimal. A Decimal128 column surfaces through the client as
+    /// <see cref="System.Data.SqlTypes.SqlDecimal"/> (which holds the full NUMBER(38) range and is
+    /// not <c>IConvertible</c>), so <c>Convert.ToDecimal</c> alone would throw on those.
+    /// </summary>
+    private static decimal ToDecimal(object value) =>
+        value is System.Data.SqlTypes.SqlDecimal sqlDecimal ? sqlDecimal.Value : Convert.ToDecimal(value);
 
     private AdbcClient.AdbcConnection OpenClientConnection()
     {

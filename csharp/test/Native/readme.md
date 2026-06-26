@@ -27,25 +27,29 @@ that need a live account under `Integration/` and tag them `Category=Integration
 
 | File | Tests | What it covers |
 |------|-------|----------------|
-| `TypeConverterTests.cs` | ~41 | Snowflake ⇄ Arrow type mapping: NUMBER scale 0→Int64 / scale>0→Decimal128, BOOLEAN/VARCHAR/BINARY/DATE/TIME, TIMESTAMP NTZ/LTZ/TZ timezone handling, and unsupported-type → `NotSupportedException`. |
+| `TypeConverterTests.cs` | ~41 | Snowflake ⇄ Arrow type mapping (describe path): NUMBER sized by precision (scale 0 → Int32 ≤9 / Int64 ≤18 / else Decimal128; scale>0 → Decimal128) to match the result decoder, BOOLEAN/VARCHAR/BINARY/DATE/TIME, TIMESTAMP NTZ/LTZ/TZ (TZ tagged UTC), and unsupported-type → `NotSupportedException`. |
 | `RequestBuilderTests.cs` | ~10 | REST request-body construction — `BuildQueryRequest` (sqlText, ARROW result format, session parameters, bindings, multi-statement, `describeOnly`), `BuildCancelRequest`, `BuildMetadataRequest`, and argument validation. |
 | `SnowflakeAccountUrlTests.cs` | ~8 | Account → base-URL building: plain account vs. full hostname (no double-append, case-insensitive), and `NetworkConfig` host/port/protocol overrides. |
 | `QueryExecutorTests.cs` | ~5 | DML affected-row detection (`TryGetDmlAffectedRows`): INSERT count, MERGE summing across count columns, reads the row-count summary (not the payload `Returned`), non-DML / empty → false. |
 | `Configuration/ConnectionStringParserTests.cs` | ~12 | Connection-string / parameter parsing and required-parameter / invalid-authenticator validation. |
-| `SnowflakeDriverTests.cs` | ~7 | Driver lifecycle: `Open` parameter validation (missing/invalid/null → `ArgumentException`/`ArgumentNullException`), and idempotent `Dispose`. |
+| `SnowflakeDriverTests.cs` | ~7 | `Open` parameter validation (missing/invalid/null → `ArgumentException`/`ArgumentNullException`) and idempotent `Dispose` — offline; the *live* connect path is `ConnectionTests`. |
 
 These assert pure logic against in-memory inputs, so they're the fast feedback loop and
 the regression net for the protocol/encoding code.
 
 ### Integration tests (require a live account)
 
-| File | What it covers |
-|------|----------------|
-| `QueryAndMetadataTests.cs` | **Content-asserting** tests against the shared read-only `SNOWFLAKE_SAMPLE_DATA` (TPC-H SF1). Because that data has fixed cardinalities/contents in every account, these verify *real values*: REGION's 5 region names, NATION = 25 rows/4 cols, CUSTOMER = full 150,000-row chunk streaming, invalid-SQL → `AdbcException`, deterministic `GetTableSchema` types, `GetTableTypes` = TABLE/VIEW, `GetInfo` vendor = "Snowflake", and `GetObjects` navigated through the nested Arrow down to NATION's columns. |
-| `DriverTests.cs` | Baseline driver surface: connect, execute query, execute update (DML affected-rows), and the metadata entry points (`GetInfo`/`GetTableTypes`/`GetTableSchema`/`GetObjects`). Uses the configured `metadata.*` table. |
-| `StatementTests.cs` | Statement surface: execute query, `ExecuteUpdate` on a SELECT → -1, `GetParameterSchema` before `Prepare` throws, and prepare-then-execute. |
-| `ClientTests.cs` | Client/connection patterns: sync and async connect + query/update/get-schema. |
-| `ClientIntegrationTests.cs` | Larger-result throughput across row-count sizes against the sample data. |
+Each integration file owns **one concern** of one of the driver's two surfaces — the Arrow-native
+ADBC API (`Driver`/`Database`/`Connection`/`Statement` returning Arrow) or the ADO.NET client layer.
+
+| File | Surface | What it covers |
+|------|---------|----------------|
+| `ConnectionTests.cs` | Arrow-native | **Live connectivity / lifecycle smoke**: the `Driver → Database → Connection` open path works against a real account. The fast first-line diagnostic that isolates "cannot connect" from "a query failed"; every other suite relies on this path as setup but does not assert it directly. |
+| `StatementTests.cs` | Arrow-native | The `AdbcStatement` surface: execute query, `ExecuteUpdate` (SELECT → -1; DML → affected-row count), `Prepare` then execute, parameter binding (`?` by position — text and numeric), and `GetParameterSchema` → `NotImplementedException`. |
+| `QueryAndMetadataTests.cs` | Arrow-native | **Content-asserting** query execution + the metadata methods, against the shared read-only `SNOWFLAKE_SAMPLE_DATA` (TPC-H SF1). Because that data has fixed cardinalities/contents in every account, these verify *real values*: REGION's 5 names, NATION = 25 rows/4 cols, CUSTOMER = full 150,000-row chunk streaming, invalid-SQL → `AdbcException`, deterministic `GetTableSchema` types, `GetTableTypes` = TABLE/VIEW, `GetInfo` vendor = "Snowflake", and `GetObjects` navigated through the nested Arrow down to NATION's columns. |
+| `TypeDecodingTests.cs` | Arrow-native | The over-the-wire **result type-decode matrix**: for each Snowflake type, `SELECT <literal>` and assert the Arrow type the result stream produces — plus exact values for NUMBER precision sizing (Int32/Int64/Decimal128), TIME, and TIMESTAMP UTC instants. |
+| `ClientTests.cs` | ADO.NET client | The driver used as a `System.Data.Common` provider (`Apache.Arrow.Adbc.Client`): `DbDataReader` row iteration, column metadata, connection-string parsing, `ExecuteNonQuery` DML, and the end-to-end Arrow→CLR type contract. |
+| `BenchmarkTests.cs` | Arrow-native | **Performance**: result-fetch throughput across row-count sizes against the sample data. |
 
 > **Note on result-set types.** Query result-set Arrow types come from Snowflake's
 > native Arrow IPC (encoding-dependent), so the integration tests assert on **content,
@@ -54,8 +58,6 @@ the regression net for the protocol/encoding code.
 
 ### Not yet covered (known gaps)
 
-- **Parameter binding (`?` placeholders)** — the bound-value wire format is unverified
-  and likely needs work, so there is intentionally no passing binding test yet.
 - **Transactions** — `Commit`/`Rollback` currently throw `NotImplementedException`.
 - **Constraint column detail** — `GetObjects` reports constraint names/types only (FK
   referenced-column usage needs `SHOW … KEYS` + `RESULT_SCAN`).
@@ -75,7 +77,8 @@ the regression net for the protocol/encoding code.
 - The **`SNOWFLAKE_SAMPLE_DATA`** share — mounted by default, **no setup required** — for the
   suites that read it (the query/metadata/benchmark tests).
 - A **writable database + schema** for the write-path tests (anything that creates a
-  `TEMPORARY` table — e.g. `DriverTests.CanExecuteUpdate` and the `ClientTests` write test).
+  `TEMPORARY` table — e.g. `StatementTests.ExecuteUpdateOnDmlReturnsAffectedRowCount` and the
+  `ClientTests` write tests).
   This is the only manual prerequisite: create a database your role can write to (e.g.
   `CREATE DATABASE ADBC_TEST;` — a `PUBLIC` schema is created automatically) and point
   `metadata.catalog` / `metadata.schema` at it. The tests create their own **temporary**
@@ -118,9 +121,12 @@ disabled because it does not populate the `metadata.*` block the metadata tests 
 }
 ```
 
-`QueryAndMetadataTests` ignores `metadata.*`/`query` (it targets `SNOWFLAKE_SAMPLE_DATA`
-directly), so it works with only valid credentials + a warehouse. The other suites use
-`query`/`metadata.*`.
+The native tests need only valid **credentials + a warehouse**, plus a **writable**
+`metadata.catalog`/`metadata.schema` for the write-path tests (`ClientTests`,
+`StatementTests.ExecuteUpdateOnDmlReturnsAffectedRowCount`). `QueryAndMetadataTests` and
+`TypeDecodingTests` target `SNOWFLAKE_SAMPLE_DATA` / SQL literals directly and ignore
+`metadata.*`. The `query` / `expectedResults` / `expectedColumnCount` fields are **not used** by
+the native tests — they remain only for Interop-config compatibility.
 
 **2. Point the environment variable at it:**
 

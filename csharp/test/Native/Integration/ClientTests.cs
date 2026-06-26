@@ -37,9 +37,10 @@ namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 /// Snowflake driver — i.e. using the driver as a standard <c>System.Data.Common</c> provider:
 /// a <c>DbConnection</c> / <c>DbCommand</c> / <c>DbDataReader</c> that returns CLR values.
 ///
-/// This is the counterpart to <see cref="DriverTests"/>: where DriverTests exercises the
-/// Arrow-native ADBC API (<c>AdbcConnection</c>/<c>AdbcStatement</c> returning Arrow
-/// <c>RecordBatch</c>es), these verify the parts that <i>only</i> the client layer runs:
+/// This is the counterpart to the Arrow-native ADBC API suites (<see cref="StatementTests"/>,
+/// <see cref="QueryAndMetadataTests"/>, <see cref="TypeDecodingTests"/>, which use
+/// <c>AdbcConnection</c>/<c>AdbcStatement</c> returning Arrow <c>RecordBatch</c>es); these verify
+/// the parts that <i>only</i> the client layer runs:
 /// <list type="bullet">
 ///   <item>connection-string parsing into driver parameters,</item>
 ///   <item>the <c>DbDataReader</c> row/column iteration model (<c>Read</c>, ordinals, <c>FieldCount</c>),</item>
@@ -77,33 +78,47 @@ public class ClientTests
             "ClientTests require a writable database/schema (metadata.catalog / metadata.schema).");
     }
 
+    /// <summary>
+    /// The reader walks every row of a multi-row result via <c>Read()</c> and returns them in the
+    /// queried ORDER BY sequence. (CLR string conversion itself is covered by the type-contract
+    /// theory; this test is about row iteration and ordering.)
+    /// </summary>
     [SkippableFact]
-    public void Reader_ReturnsRowsAsClrStrings()
+    public void Reader_IteratesAllRowsInOrder()
     {
+        // Given a two-row table queried with an explicit order
         using var connection = OpenClientConnection();
         string table = CreateAndPopulateTempTable(connection);
-
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT NAME FROM {table} ORDER BY ID";
-        using var reader = command.ExecuteReader();
 
+        // When every row is read in sequence
+        using var reader = command.ExecuteReader();
         var names = new List<string?>();
         while (reader.Read())
-            names.Add(reader.GetString(0));   // Arrow Utf8 column -> CLR string
+            names.Add(reader.GetString(0));
 
+        // Then they come back in the queried order
         Assert.Equal(new[] { "alpha", "beta" }, names);
     }
 
+    /// <summary>
+    /// The reader exposes the result's column count and names (<c>FieldCount</c> / <c>GetName</c>
+    /// by ordinal).
+    /// </summary>
     [SkippableFact]
     public void Reader_ExposesColumnMetadata()
     {
+        // Given a five-column result
         using var connection = OpenClientConnection();
         string table = CreateAndPopulateTempTable(connection);
-
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT ID, NAME, ACTIVE, AMOUNT, PRICE FROM {table}";
+
+        // When the reader is opened
         using var reader = command.ExecuteReader();
 
+        // Then it exposes the column count and names
         Assert.Equal(5, reader.FieldCount);
         Assert.Equal("ID", reader.GetName(0));
         Assert.Equal("NAME", reader.GetName(1));
@@ -113,44 +128,19 @@ public class ClientTests
     }
 
     [SkippableFact]
-    public void Reader_ConvertsColumnTypesToClr()
-    {
-        using var connection = OpenClientConnection();
-        string table = CreateAndPopulateTempTable(connection);
-
-        using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT ID, NAME, ACTIVE, AMOUNT, PRICE FROM {table} WHERE ID = 1";
-        using var reader = command.ExecuteReader();
-
-        Assert.True(reader.Read());
-
-        // NUMBER(38,0): Snowflake's INT/NUMBER default precision (38) exceeds Int64, so the driver
-        // sizes it to Decimal128, which the client surfaces as SqlDecimal — read it like PRICE.
-        Assert.Equal(1m, ToDecimal(reader.GetValue(0)));            // NUMBER(38,0)
-        Assert.Equal("alpha", reader.GetString(1));                 // VARCHAR
-        Assert.True(Convert.ToBoolean(reader.GetValue(2)));         // BOOLEAN
-        Assert.Equal(3.5, Convert.ToDouble(reader.GetValue(3)), 5); // FLOAT
-
-        // NUMBER(10,2): the driver rescales the raw 999 to a Decimal128 (9.99); the client
-        // surfaces a Decimal128 as SqlDecimal (it holds the full NUMBER(38) range that the
-        // CLR decimal cannot).
-        Assert.Equal(9.99m, ToDecimal(reader.GetValue(4)));        // NUMBER(10,2)
-
-        Assert.False(reader.Read());
-    }
-
-    [SkippableFact]
     public void Reader_CountStar_ReturnsRowCount()
     {
-        // Note: AdbcCommand.ExecuteScalar is not implemented in the client layer (throws
-        // NotImplementedException), so read the single value via the reader instead.
+        // Given a two-row table (AdbcCommand.ExecuteScalar throws NotImplementedException in the
+        // client layer, so the single aggregate value is read via the reader instead)
         using var connection = OpenClientConnection();
         string table = CreateAndPopulateTempTable(connection);
-
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {table}";
+
+        // When the COUNT(*) is read
         using var reader = command.ExecuteReader();
 
+        // Then it returns the row count
         Assert.True(reader.Read());
         Assert.Equal(2, Convert.ToInt32(reader.GetValue(0)));
     }
@@ -158,52 +148,84 @@ public class ClientTests
     [SkippableFact]
     public void ConnectionString_OpensAndQueries()
     {
-        // Specifically exercises the client's connection-string parsing path: the driver
-        // parameters are round-tripped through a connection string rather than passed directly.
+        // Given driver parameters round-tripped through a connection string (rather than passed
+        // directly) — this is what exercises the client's connection-string parsing path
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         var builder = new DbConnectionStringBuilder(useOdbcRules: true);
         foreach (var kvp in parameters)
             builder[kvp.Key] = kvp.Value;
 
+        // When a connection is opened from that string and queried
         using var connection = new AdbcClient.AdbcConnection(builder.ConnectionString) { AdbcDriver = driver };
         connection.Open();
-
         string table = CreateAndPopulateTempTable(connection);
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {table}";
         using var reader = command.ExecuteReader();
 
+        // Then it connects and returns results
         Assert.True(reader.Read());
         Assert.Equal(2, Convert.ToInt32(reader.GetValue(0)));
     }
 
+    /// <summary>
+    /// <c>ExecuteNonQuery</c> runs DML and returns the affected-row count (2 inserted rows here).
+    /// </summary>
     [SkippableFact]
     public void ExecuteNonQuery_RunsDml()
     {
+        // Given an empty temporary table
         using var connection = OpenClientConnection();
         string table = $"{_testConfiguration.Metadata.Catalog}.{_testConfiguration.Metadata.Schema}.CLIENT_DML_{Guid.NewGuid():N}";
-
         using (var create = connection.CreateCommand())
         {
             create.CommandText = $"CREATE TEMPORARY TABLE {table} (id INT)";
             create.ExecuteNonQuery();
         }
 
+        // When two rows are inserted via ExecuteNonQuery
         using var insert = connection.CreateCommand();
         insert.CommandText = $"INSERT INTO {table} (id) VALUES (1), (2)";
         int affected = insert.ExecuteNonQuery();
-        
+
+        // Then it reports the affected-row count
         _output.WriteLine($"ExecuteNonQuery reported {affected} affected rows");
         Assert.Equal(2, affected);
     }
 
     /// <summary>
-    /// Reads a numeric CLR value as a decimal. A Decimal128 column surfaces through the client as
-    /// <see cref="System.Data.SqlTypes.SqlDecimal"/> (which holds the full NUMBER(38) range and is
-    /// not <c>IConvertible</c>), so <c>Convert.ToDecimal</c> alone would throw on those.
+    /// The end-to-end CLR type contract: the <see cref="Type"/> a consumer gets from the reader
+    /// for each Snowflake type. The integer cases are the payoff of the driver's precision-driven
+    /// Arrow sizing (scale-0 NUMBER ≤ 9 → int, ≤ 18 → long, else Decimal128); the rest is the
+    /// upstream client's Arrow → CLR mapping, pinned here only as the seam. A NUMBER that can
+    /// exceed long surfaces as <see cref="System.Data.SqlTypes.SqlDecimal"/> (the default
+    /// <c>DecimalBehavior</c>): it holds the full NUMBER(38) range but is not IConvertible, so read
+    /// it via <c>((SqlDecimal)value).Value</c> rather than <c>Convert.*</c>. Value correctness of
+    /// the decode is owned by <see cref="TypeDecodingTests"/>; the client's own conversion matrix
+    /// (and the <c>DecimalBehavior</c> toggle) is covered upstream.
     /// </summary>
-    private static decimal ToDecimal(object value) =>
-        value is System.Data.SqlTypes.SqlDecimal sqlDecimal ? sqlDecimal.Value : Convert.ToDecimal(value);
+    [SkippableTheory]
+    [InlineData("123::NUMBER(9,0)", typeof(int))]
+    [InlineData("123::NUMBER(18,0)", typeof(long))]
+    [InlineData("123::NUMBER(38,0)", typeof(System.Data.SqlTypes.SqlDecimal))]
+    [InlineData("9.99::NUMBER(10,2)", typeof(System.Data.SqlTypes.SqlDecimal))]
+    [InlineData("'x'::VARCHAR", typeof(string))]
+    [InlineData("TRUE::BOOLEAN", typeof(bool))]
+    [InlineData("1.5::FLOAT", typeof(double))]
+    public void Reader_YieldsExpectedClrTypePerSnowflakeType(string sqlLiteral, Type expectedClrType)
+    {
+        // Given a single typed literal
+        using var connection = OpenClientConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {sqlLiteral} AS V";
+
+        // When it is read through the client
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+
+        // Then the CLR value has the expected type
+        Assert.Equal(expectedClrType, reader.GetValue(0).GetType());
+    }
 
     private AdbcClient.AdbcConnection OpenClientConnection()
     {

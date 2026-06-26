@@ -31,8 +31,22 @@ using Apache.Arrow.Types;
 namespace AdbcDrivers.Snowflake.Native.Tests;
 
 /// <summary>
-/// Offline unit tests for <see cref="TypeConverter"/> (Snowflake &lt;-&gt; Arrow type mapping).
-/// These require no Snowflake connection.
+/// Offline unit tests for <see cref="TypeConverter"/> — the <b>describe/metadata mapping</b>
+/// (layer 1 of 3, see below). It translates a Snowflake type <i>name</i> to an Arrow type and
+/// back, maps an Arrow batch to bind parameters, and builds an Arrow batch from a JSON row set.
+/// This is the path behind GetTableSchema/describe; being a pure function over type names, it
+/// needs no connection.
+///
+/// The driver has three type-fidelity layers, each tested in its own place:
+/// <list type="number">
+///   <item><b>this</b> — Snowflake type name ⇄ Arrow (describe path, offline);</item>
+///   <item><see cref="Integration.TypeDecodingTests"/> — Snowflake result <i>wire</i> → Arrow,
+///     over a live query (the source of truth for what a SELECT actually returns);</item>
+///   <item><c>Integration.ClientTests.Reader_ConvertsColumnTypesToClr</c> — Arrow → CLR via the
+///     ADO.NET client.</item>
+/// </list>
+/// Layers 1 and 2 are distinct code paths and can differ — e.g. NUMBER(38,0) maps to Int64 here
+/// but decodes to Decimal128 off the wire.
 /// </summary>
 [Trait("Category", "Unit")]
 public class TypeConverterTests
@@ -66,12 +80,17 @@ public class TypeConverterTests
         Assert.IsType(expectedArrowType, result);
     }
 
-    [Fact]
-    public void ConvertSnowflakeTypeToArrow_NumberWithoutScale_IsInt64()
+    [Theory]
+    [InlineData(9, typeof(Int32Type))]
+    [InlineData(18, typeof(Int64Type))]
+    [InlineData(38, typeof(Decimal128Type))]
+    public void ConvertSnowflakeTypeToArrow_ScaleZeroNumber_SizedByPrecision(int precision, Type expectedArrowType)
     {
+        // Matches the result decoder: a scale-0 NUMBER is sized by its declared precision so the
+        // described schema agrees with what a query returns.
         IArrowType result = _converter.ConvertSnowflakeTypeToArrow(
-            new SnowflakeDataType { TypeName = "NUMBER", Precision = 38, Scale = 0 });
-        Assert.IsType<Int64Type>(result);
+            new SnowflakeDataType { TypeName = "NUMBER", Precision = precision, Scale = 0 });
+        Assert.IsType(expectedArrowType, result);
     }
 
     [Fact]
@@ -106,11 +125,14 @@ public class TypeConverterTests
     }
 
     [Fact]
-    public void ConvertSnowflakeTypeToArrow_TimestampTz_UsesProvidedTimezone()
+    public void ConvertSnowflakeTypeToArrow_TimestampTz_IsTaggedUtc()
     {
+        // TIMESTAMP_TZ decodes to its UTC instant (a single Arrow column cannot carry a per-row
+        // offset), so the described type matches the result: Timestamp[ns] tagged "UTC", whatever
+        // the column's own timezone.
         var result = Assert.IsType<TimestampType>(_converter.ConvertSnowflakeTypeToArrow(
             new SnowflakeDataType { TypeName = "TIMESTAMP_TZ", Timezone = "America/New_York" }));
-        Assert.Equal("America/New_York", result.Timezone);
+        Assert.Equal("UTC", result.Timezone);
     }
 
     [Fact]
@@ -181,6 +203,7 @@ public class TypeConverterTests
     [Fact]
     public void ConvertArrowBatchToParameters_KeysBindingsPositionallyWithTypes()
     {
+        // Given a two-column Arrow batch (an Int64 and a string)
         var schema = new Schema(
             [new Field("A", Int64Type.Default, true), new Field("B", StringType.Default, true)],
             null);
@@ -188,10 +211,11 @@ public class TypeConverterTests
         IArrowArray nameArray = new StringArray.Builder().Append("hello").Build();
         using var batch = new RecordBatch(schema, [idArray, nameArray], 1);
 
+        // When it is converted to bind parameters
         var result = _converter.ConvertArrowBatchToParameters(batch);
 
-        // Keyed by 1-based placeholder position (matching '?'), not by column name, with the
-        // Snowflake bind type mapped from the Arrow type.
+        // Then bindings are keyed by 1-based placeholder position (matching '?'), not by column
+        // name, with the Snowflake bind type mapped from the Arrow type.
         Assert.Equal(2, result.Parameters.Count);
         Assert.Equal("FIXED", result.Parameters["1"].Type);
         Assert.Equal("42", result.Parameters["1"].Value);
@@ -222,6 +246,7 @@ public class TypeConverterTests
     [Fact]
     public void ConvertSnowflakeResultToArrow_BuildsSchemaAndValues()
     {
+        // Given a JSON result set with two typed columns and two rows (one with a null)
         var resultSet = new SnowflakeResultSet
         {
             Columns =
@@ -236,17 +261,20 @@ public class TypeConverterTests
             ]
         };
 
+        // When it is converted to an Arrow batch
         using RecordBatch batch = _converter.ConvertSnowflakeResultToArrow(resultSet);
 
+        // Then the schema and values match
         Assert.Equal(2, batch.Length);
         Assert.Equal(2, batch.ColumnCount);
         Assert.Equal("ID", batch.Schema.FieldsList[0].Name);
-        Assert.IsType<Int64Type>(batch.Schema.FieldsList[0].DataType);
+        // NUMBER(38,0) sizes to Decimal128 (precision-driven), and the value array matches.
+        Assert.IsType<Decimal128Type>(batch.Schema.FieldsList[0].DataType);
         Assert.IsType<StringType>(batch.Schema.FieldsList[1].DataType);
 
-        var idColumn = (Int64Array)batch.Column(0);
-        Assert.Equal(1L, idColumn.GetValue(0));
-        Assert.Equal(2L, idColumn.GetValue(1));
+        var idColumn = (Decimal128Array)batch.Column(0);
+        Assert.Equal(1m, idColumn.GetValue(0));
+        Assert.Equal(2m, idColumn.GetValue(1));
 
         var nameColumn = (StringArray)batch.Column(1);
         Assert.Equal("a", nameColumn.GetString(0));

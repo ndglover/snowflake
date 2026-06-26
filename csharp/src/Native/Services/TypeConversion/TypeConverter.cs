@@ -48,11 +48,9 @@ internal class TypeConverter : ITypeConverter
 
             SnowflakeTypeCode.Integer => Int64Type.Default,
 
-            SnowflakeTypeCode.Number => snowflakeType.Scale.GetValueOrDefault(0) == 0
-                ? Int64Type.Default
-                : new Decimal128Type(
-                    snowflakeType.Precision.GetValueOrDefault(38),
-                    snowflakeType.Scale.GetValueOrDefault(0)),
+            SnowflakeTypeCode.Number => FixedToArrowType(
+                snowflakeType.Precision.GetValueOrDefault(38),
+                snowflakeType.Scale.GetValueOrDefault(0)),
 
             SnowflakeTypeCode.Float => FloatType.Default,
 
@@ -71,8 +69,9 @@ internal class TypeConverter : ITypeConverter
 
             SnowflakeTypeCode.TimestampLtz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
 
-            SnowflakeTypeCode.TimestampTz => new TimestampType(TimeUnit.Nanosecond,
-                timezone: snowflakeType.Timezone ?? "UTC"),
+            // The result decoder stores TIMESTAMP_TZ as its UTC instant (a single Arrow column
+            // cannot carry a per-row offset), so the described type matches: Timestamp[ns] "UTC".
+            SnowflakeTypeCode.TimestampTz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
 
             SnowflakeTypeCode.Variant or
             SnowflakeTypeCode.Object => StringType.Default, // JSON as string
@@ -84,6 +83,28 @@ internal class TypeConverter : ITypeConverter
 
             _ => throw new NotSupportedException($"Snowflake type {snowflakeType.TypeName} is not supported.")
         };
+    }
+
+    // Largest decimal precision guaranteed to fit each integer width (Int32 holds 9 full digits,
+    // Int64 holds 18).
+    private const int MaxFixedInt32Precision = 9;
+    private const int MaxFixedInt64Precision = 18;
+
+    /// <summary>
+    /// Sizes a FIXED (NUMBER/DECIMAL) column to a stable Arrow type from its declared precision and
+    /// scale — the same rule the result decoder (<c>SnowflakeResultArrowStream</c>) applies, so the
+    /// schema this describes matches what a query actually returns: scale &gt; 0 → Decimal128;
+    /// scale 0 → Int32 (precision ≤ 9) / Int64 (≤ 18) / Decimal128 (a NUMBER(38,0) can exceed Int64).
+    /// </summary>
+    private static IArrowType FixedToArrowType(int precision, int scale)
+    {
+        if (scale > 0)
+            return new Decimal128Type(precision, scale);
+        if (precision <= MaxFixedInt32Precision)
+            return Int32Type.Default;
+        if (precision <= MaxFixedInt64Precision)
+            return Int64Type.Default;
+        return new Decimal128Type(precision, scale);
     }
 
     /// <inheritdoc/>
@@ -212,9 +233,7 @@ internal class TypeConverter : ITypeConverter
         {
             SnowflakeTypeCode.Boolean => BuildBooleanArray(values),
             SnowflakeTypeCode.Integer => BuildInt64Array(values),
-            SnowflakeTypeCode.Number => dataType.Scale.GetValueOrDefault(0) == 0
-                ? BuildInt64Array(values)
-                : BuildDecimalArray(values, dataType),
+            SnowflakeTypeCode.Number => BuildFixedArray(values, dataType),
             SnowflakeTypeCode.Float => BuildFloatArray(values),
             SnowflakeTypeCode.Double => BuildDoubleArray(values),
             SnowflakeTypeCode.Varchar => BuildStringArray(values),
@@ -241,6 +260,33 @@ internal class TypeConverter : ITypeConverter
                 builder.AppendNull();
             else
                 builder.Append(Convert.ToBoolean(value));
+        }
+        return builder.Build();
+    }
+
+    // Builds a FIXED column's values into the same Arrow type FixedToArrowType declares, so the
+    // array matches the schema field built for it.
+    private IArrowArray BuildFixedArray(object?[] values, SnowflakeDataType dataType)
+    {
+        int precision = dataType.Precision.GetValueOrDefault(38);
+        int scale = dataType.Scale.GetValueOrDefault(0);
+        return FixedToArrowType(precision, scale) switch
+        {
+            Int32Type => BuildInt32Array(values),
+            Int64Type => BuildInt64Array(values),
+            _ => BuildDecimalArray(values, dataType)
+        };
+    }
+
+    private IArrowArray BuildInt32Array(object?[] values)
+    {
+        var builder = new Int32Array.Builder();
+        foreach (var value in values)
+        {
+            if (value == null)
+                builder.AppendNull();
+            else
+                builder.Append(Convert.ToInt32(value));
         }
         return builder.Build();
     }

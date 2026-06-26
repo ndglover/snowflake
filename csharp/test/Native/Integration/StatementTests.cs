@@ -57,18 +57,20 @@ public class StatementTests
     [SkippableFact]
     public async Task CanExecuteQuery()
     {
+        // Given a simple two-column query
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = "SELECT 1 AS X, 'two' AS Y";
-        var result = await statement.ExecuteQueryAsync();
 
+        // When it is executed and the first batch is read
+        var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
         using var stream = result.Stream;
         var batch = await stream.ReadNextRecordBatchAsync();
 
+        // Then the batch has the expected shape
         Assert.NotNull(batch);
         Assert.Equal(2, batch.ColumnCount);
         Assert.Equal(1, batch.Length);
@@ -77,15 +79,17 @@ public class StatementTests
     [SkippableFact]
     public void ExecuteUpdateOnSelectReturnsNoRowCount()
     {
+        // Given a statement holding a SELECT (which affects no rows)
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = "SELECT 1";
+
+        // When it is run as an update
         var result = statement.ExecuteUpdate();
 
-        // A SELECT affects no rows; the driver reports -1 (unknown) per the ADBC contract.
+        // Then the driver reports -1 (unknown) per the ADBC contract
         _output.WriteLine($"ExecuteUpdate on SELECT reported {result.AffectedRows} affected rows");
         Assert.Equal(-1, result.AffectedRows);
     }
@@ -93,32 +97,35 @@ public class StatementTests
     [SkippableFact]
     public void GetParameterSchema_IsNotSupported()
     {
+        // Given a fresh statement
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
-        // Snowflake's protocol does not report bind-parameter types, so GetParameterSchema
-        // is unsupported regardless of whether the statement has been prepared.
+        // When / Then GetParameterSchema throws: Snowflake's protocol does not report
+        // bind-parameter types, so it is unsupported regardless of whether Prepare was called.
         Assert.Throws<NotImplementedException>(statement.GetParameterSchema);
     }
 
     [SkippableFact]
     public async Task CanPrepareAndExecute()
     {
+        // Given a prepared statement
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = "SELECT 1 AS X";
         statement.Prepare();
 
+        // When it is executed and the first batch is read
         var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
-
         using var stream = result.Stream;
         var batch = await stream.ReadNextRecordBatchAsync();
+
+        // Then it returns the single row
         Assert.NotNull(batch);
         Assert.Equal(1, batch.Length);
     }
@@ -126,24 +133,25 @@ public class StatementTests
     [SkippableFact]
     public async Task CanBindTextParameter()
     {
+        // Given a parameterized query and a text bind value in a column deliberately NOT named
+        // "1" (the driver binds by position, not name)
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = "SELECT ? AS V";
-
-        // The bind column is deliberately NOT named "1": the driver binds by position, not name.
         var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
         var values = new StringArray.Builder().Append("hello").Build();
         using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
-        statement.Bind(batch, schema);
 
+        // When the parameter is bound and the query executed
+        statement.Bind(batch, schema);
         var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
         using var stream = result.Stream!;
         var read = await stream.ReadNextRecordBatchAsync();
 
+        // Then the bound value is echoed back
         Assert.NotNull(read);
         Assert.Equal("hello", ((StringArray)read!.Column(0)).GetString(0));
     }
@@ -151,26 +159,56 @@ public class StatementTests
     [SkippableFact]
     public async Task CanBindNumericParameter()
     {
+        // Given a query whose WHERE compares the bind value as a number, and a numeric bind of 42
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-
-        // 'ok' returns only if the bound value is correctly compared as the number 42.
         statement.SqlQuery = "SELECT 'ok' AS V WHERE ? = 42";
-
         var schema = new Schema(new[] { new Field("n", Int64Type.Default, true) }, null);
         var values = new Int64Array.Builder().Append(42).Build();
         using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
-        statement.Bind(batch, schema);
 
+        // When the parameter is bound and the query executed
+        statement.Bind(batch, schema);
         var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
         using var stream = result.Stream!;
         var read = await stream.ReadNextRecordBatchAsync();
 
+        // Then the row returns, proving the value was bound and compared as the number 42
         Assert.NotNull(read);
         Assert.Equal(1, read!.Length);
         Assert.Equal("ok", ((StringArray)read.Column(0)).GetString(0));
+    }
+
+    [SkippableFact]
+    public void ExecuteUpdateOnDmlReturnsAffectedRowCount()
+    {
+        // Given a temporary table (requires a writable metadata.catalog / metadata.schema)
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        string table = string.Format(
+            "{0}.{1}.NATIVE_UPD_{2}",
+            _testConfiguration.Metadata.Catalog,
+            _testConfiguration.Metadata.Schema,
+            Guid.NewGuid().ToString("N"));
+        statement.SqlQuery = $"CREATE TEMPORARY TABLE {table} (id INT)";
+        statement.ExecuteUpdate();
+
+        // When two rows are inserted and then deleted
+        statement.SqlQuery = $"INSERT INTO {table} (id) VALUES (1), (2)";
+        var result = statement.ExecuteUpdate();
+        statement.SqlQuery = $"DELETE FROM {table} WHERE id IN (1,2)";
+        var result2 = statement.ExecuteUpdate();
+
+        // Then each reports its affected-row count, parsed from the JSON RowSet (or -1 if a
+        // driver/server version cannot determine it). Both affect 2 rows while the payload's
+        // Returned count is 1.
+        _output.WriteLine($"Insert reported {result.AffectedRows}, delete reported {result2.AffectedRows} affected rows");
+        Assert.True(result.AffectedRows == 2 || result.AffectedRows == -1);
+        Assert.True(result2.AffectedRows == 2 || result2.AffectedRows == -1);
     }
 }

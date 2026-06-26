@@ -51,16 +51,16 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public async Task OpenAsync_WithInvalidParameters_ShouldThrowArgumentException()
     {
-        // Arrange
+        // Given invalid connection parameters
         var parameters = new Dictionary<string, string>
         {
             ["invalid"] = "parameter"
         };
 
-        // Act
+        // When the database is opened and a connection attempted
         using SnowflakeDatabase database = (SnowflakeDatabase)_driver.Open(parameters);
 
-        // Assert
+        // Then ConnectAsync throws, complaining about the missing account
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => database.ConnectAsync(null!));
         ex.Message.Should().Contain("account");
     }
@@ -68,7 +68,7 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Open_WithValidParameters_ShouldReturnDatabase()
     {
-        // Arrange
+        // Given valid connection parameters
         var parameters = new Dictionary<string, string>
         {
             ["account"] = "testaccount",
@@ -76,10 +76,10 @@ public class SnowflakeDriverTests : IDisposable
             ["password"] = "testpass"
         };
 
-        // Act
+        // When the driver opens a database
         using var database = _driver.Open(parameters);
 
-        // Assert
+        // Then a SnowflakeDatabase is returned
         database.Should().NotBeNull();
         database.Should().BeOfType<SnowflakeDatabase>();
     }
@@ -87,7 +87,7 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Open_WithNullParameters_ShouldThrowArgumentNullException()
     {
-        // Act & Assert
+        // When / Then opening with null parameters throws ArgumentNullException
         var exception = Assert.Throws<ArgumentNullException>(() => _driver.Open((IReadOnlyDictionary<string, string>)null!));
         exception.ParamName.Should().Be("parameters");
     }
@@ -95,16 +95,16 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Open_WithInvalidParameters_ShouldThrowArgumentException()
     {
-        // Arrange
+        // Given invalid connection parameters
         var parameters = new Dictionary<string, string>
         {
             ["invalid"] = "parameter"
         };
 
-        // Act
+        // When the database is opened and a connection attempted
         var database = _driver.Open(parameters);
 
-        // Assert
+        // Then Connect throws, complaining about the missing account
         var exception = Assert.Throws<ArgumentException>(() => database.Connect(null));
         exception.Message.Should().Contain("account");
     }
@@ -112,17 +112,17 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Open_WithMissingRequiredParameters_ShouldThrowArgumentException()
     {
-        // Arrange
+        // Given parameters missing the required account
         var parameters = new Dictionary<string, string>
         {
             ["user"] = "testuser",
             ["password"] = "testpass"
         };
 
-        // Act
+        // When the database is opened and a connection attempted
         var database = _driver.Open(parameters);
 
-        // Assert
+        // Then Connect throws, complaining about the missing account
         var exception = Assert.Throws<ArgumentException>(() => database.Connect(null));
         exception.Message.Should().Contain("account");
     }
@@ -130,7 +130,7 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Dispose_ShouldNotThrow()
     {
-        // Act & Assert
+        // When / Then disposing once does not throw
         var ex = Record.Exception(() => _driver.Dispose());
         Assert.Null(ex);
     }
@@ -138,7 +138,7 @@ public class SnowflakeDriverTests : IDisposable
     [Fact]
     public void Dispose_CalledMultipleTimes_ShouldNotThrow()
     {
-        // Act & Assert
+        // When / Then disposing twice does not throw
         var ex = Record.Exception(() =>
         {
             _driver.Dispose();

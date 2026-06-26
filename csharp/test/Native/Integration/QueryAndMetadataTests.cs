@@ -75,15 +75,16 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task Query_Region_ReturnsFiveKnownRows()
     {
+        // Given a query against TPC-H REGION (which always has exactly 5 rows with these names)
         using var connection = Connect();
         using var statement = connection.CreateStatement();
-
-        // TPC-H REGION always has exactly 5 rows with these names.
         statement.SqlQuery = $"SELECT R_NAME FROM {SampleDb}.{SampleSchema}.REGION ORDER BY R_NAME";
-        var result = await statement.ExecuteQueryAsync();
 
+        // When the name column is read
+        var result = await statement.ExecuteQueryAsync();
         List<string?> names = await ReadStringColumnAsync(result, columnIndex: 0);
 
+        // Then all five names come back in order
         Assert.Equal(5, names.Count);
         Assert.Equal(
             new[] { "AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST" },
@@ -93,14 +94,16 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task Query_Nation_ReturnsTwentyFiveRowsWithFourColumns()
     {
+        // Given a SELECT * over TPC-H NATION
         using var connection = Connect();
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = $"SELECT * FROM {SampleDb}.{SampleSchema}.NATION";
-        var result = await statement.ExecuteQueryAsync();
 
+        // When the whole result is read
+        var result = await statement.ExecuteQueryAsync();
         (long rows, int columnCount, _) = await ReadAllAsync(result);
 
+        // Then it has 25 rows and 4 columns
         Assert.Equal(25, rows);
         Assert.Equal(4, columnCount);
     }
@@ -108,18 +111,19 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task Query_Customer_StreamsAllChunks()
     {
+        // Given a query over CUSTOMER — 150,000 rows in SF1, large enough to be returned as
+        // multiple Arrow chunks
         using var connection = Connect();
         using var statement = connection.CreateStatement();
-
-        // 150,000 rows in SF1 — large enough to be returned as multiple Arrow chunks,
-        // so reaching the exact total proves the chunk-download + streaming path works
-        // end to end, not just the first inline batch.
         statement.SqlQuery = $"SELECT C_CUSTKEY FROM {SampleDb}.{SampleSchema}.CUSTOMER";
-        var result = await statement.ExecuteQueryAsync();
 
+        // When the entire stream is drained
+        var result = await statement.ExecuteQueryAsync();
         (long rows, int columnCount, int batchCount) = await ReadAllAsync(result);
         _output.WriteLine($"CUSTOMER streamed {rows} rows across {batchCount} batch(es)");
 
+        // Then the exact total arrives, proving the chunk-download + streaming path works end to
+        // end (not just the first inline batch)
         Assert.Equal(150_000, rows);
         Assert.Equal(1, columnCount);
     }
@@ -127,11 +131,12 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public void Query_InvalidSql_ThrowsAdbcException()
     {
+        // Given a query referencing a non-existent table
         using var connection = Connect();
         using var statement = connection.CreateStatement();
-
         statement.SqlQuery = $"SELECT * FROM {SampleDb}.{SampleSchema}.NO_SUCH_TABLE_XYZ";
 
+        // When / Then executing it surfaces an AdbcException
         Assert.Throws<AdbcException>(statement.ExecuteQuery);
     }
 
@@ -140,22 +145,24 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public void GetTableSchema_Nation_HasExpectedColumnsAndTypes()
     {
+        // Given a connection
         using var connection = Connect();
 
+        // When the schema of NATION is described
         Schema schema = connection.GetTableSchema(SampleDb, SampleSchema, "NATION");
 
-        // The describe path maps Snowflake types through TypeConverter, so the result
-        // is deterministic: NUMBER(38,0) -> Int64, VARCHAR -> Utf8 string.
+        // Then it is deterministic and agrees with the result decoder: the describe path sizes
+        // NUMBER by precision (TPC-H keys are NUMBER(38,0) -> Decimal128), VARCHAR -> Utf8 string.
         Assert.Equal(4, schema.FieldsList.Count);
 
         Assert.Equal("N_NATIONKEY", schema.FieldsList[0].Name);
-        Assert.IsType<Int64Type>(schema.FieldsList[0].DataType);
+        Assert.IsType<Decimal128Type>(schema.FieldsList[0].DataType);
 
         Assert.Equal("N_NAME", schema.FieldsList[1].Name);
         Assert.IsType<StringType>(schema.FieldsList[1].DataType);
 
         Assert.Equal("N_REGIONKEY", schema.FieldsList[2].Name);
-        Assert.IsType<Int64Type>(schema.FieldsList[2].DataType);
+        Assert.IsType<Decimal128Type>(schema.FieldsList[2].DataType);
 
         Assert.Equal("N_COMMENT", schema.FieldsList[3].Name);
         Assert.IsType<StringType>(schema.FieldsList[3].DataType);
@@ -164,11 +171,14 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task GetTableTypes_ReturnsTableAndView()
     {
+        // Given a connection
         using var connection = Connect();
 
+        // When the table types are read
         using var stream = connection.GetTableTypes();
         List<string?> types = await ReadAllStringColumnAsync(stream, columnIndex: 0);
 
+        // Then they include TABLE and VIEW
         Assert.Contains("TABLE", types);
         Assert.Contains("VIEW", types);
     }
@@ -176,16 +186,18 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task GetInfo_ReportsSnowflakeVendorName()
     {
+        // Given a connection
         using var connection = Connect();
 
+        // When the vendor name is requested via GetInfo
         using var stream = connection.GetInfo(new List<AdbcInfoCode> { AdbcInfoCode.VendorName });
         RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
 
+        // Then it reports "Snowflake" (on the string_value union branch, type id 0)
         Assert.NotNull(batch);
         using (batch)
         {
             var infoValue = (DenseUnionArray)batch.Column(1);
-            // All GetInfo values are emitted on the string_value branch (type id 0).
             var stringValues = (StringArray)infoValue.Fields[0];
             Assert.Equal("Snowflake", stringValues.GetString(0));
         }
@@ -194,8 +206,10 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task GetObjects_All_ReturnsNationColumns()
     {
+        // Given a connection
         using var connection = Connect();
 
+        // When GetObjects is called at full depth for NATION
         using var stream = connection.GetObjects(
             AdbcConnection.GetObjectsDepth.All,
             SampleDb,
@@ -203,10 +217,10 @@ public class QueryAndMetadataTests
             "NATION",
             null,
             null);
-
         RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
 
+        // Then navigating catalog -> schema -> table -> columns yields NATION's four columns
         using (batch)
         {
             // catalog_name -> [db_schemas] -> [tables] -> [columns]
@@ -247,8 +261,10 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task GetObjects_Catalogs_ContainsSampleDatabase()
     {
+        // Given a connection
         using var connection = Connect();
 
+        // When GetObjects is called at catalog depth filtered to the sample database
         using var stream = connection.GetObjects(
             AdbcConnection.GetObjectsDepth.Catalogs,
             SampleDb,
@@ -256,10 +272,10 @@ public class QueryAndMetadataTests
             null,
             null,
             null);
-
         RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
 
+        // Then the catalog list contains it
         using (batch)
         {
             var catalogNames = (StringArray)batch.Column(0);
@@ -270,14 +286,13 @@ public class QueryAndMetadataTests
     [SkippableFact]
     public async Task GetObjects_MaliciousCatalogPattern_IsTreatedAsLiteralNotSql()
     {
+        // Given a catalog pattern carrying a SQL-injection payload — if it were interpolated into
+        // SQL, the trailing "OR DATABASE_NAME='...'" would break out of the ILIKE literal and the
+        // real sample DB would come back
         using var connection = Connect();
-
-        // If the pattern were interpolated into SQL, the trailing "OR DATABASE_NAME='...'"
-        // would break out of the ILIKE literal and the real sample DB would come back. With
-        // server-side binding it is a literal pattern that matches no database, so the
-        // catalog list must be empty -- and must NOT contain SNOWFLAKE_SAMPLE_DATA.
         string payload = $"x' OR DATABASE_NAME='{SampleDb}";
 
+        // When GetObjects is called with that pattern (server-side bound, not interpolated)
         using var stream = connection.GetObjects(
             AdbcConnection.GetObjectsDepth.Catalogs,
             payload,
@@ -285,10 +300,11 @@ public class QueryAndMetadataTests
             null,
             null,
             null);
-
         RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
         Assert.NotNull(batch);
 
+        // Then it is treated as a literal pattern that matches no database — the list is empty and
+        // must NOT contain SNOWFLAKE_SAMPLE_DATA
         using (batch)
         {
             var catalogNames = (StringArray)batch.Column(0);

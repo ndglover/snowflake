@@ -28,7 +28,7 @@ using Apache.Arrow.Adbc.Tests;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
-internal class IntegrationTestingUtils
+internal static class IntegrationTestingUtils
 {
     internal static readonly IntegrationTestConfiguration TestConfiguration;
 
@@ -37,18 +37,16 @@ internal class IntegrationTestingUtils
     static IntegrationTestingUtils()
     {
         TestConfiguration = new IntegrationTestConfiguration();
-        if (string.IsNullOrEmpty(TestConfiguration.Account))
+        if (!string.IsNullOrEmpty(TestConfiguration.Account)) return;
+        try
         {
-            try
-            {
-                TestConfiguration = Utils.LoadTestConfiguration<IntegrationTestConfiguration>(SnowflakeTestConfigVariable);
-            }
-            catch (InvalidOperationException ex)
-            {
-                Console.WriteLine($"Cannot load test configuration from environment variable `{SnowflakeTestConfigVariable}`");
-                Console.WriteLine(ex.Message);
-                TestConfiguration = new IntegrationTestConfiguration();
-            }
+            TestConfiguration = Utils.LoadTestConfiguration<IntegrationTestConfiguration>(SnowflakeTestConfigVariable);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.WriteLine($"Cannot load test configuration from environment variable `{SnowflakeTestConfigVariable}`");
+            Console.WriteLine(ex.Message);
+            TestConfiguration = new IntegrationTestConfiguration();
         }
     }
 

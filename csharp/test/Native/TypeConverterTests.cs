@@ -57,9 +57,10 @@ public class TypeConverterTests
 
     [Theory]
     [InlineData("BOOLEAN", typeof(BooleanType))]
-    [InlineData("INTEGER", typeof(Int64Type))]
-    [InlineData("INT", typeof(Int64Type))]
-    [InlineData("BIGINT", typeof(Int64Type))]
+    // INTEGER/INT/BIGINT are NUMBER(38,0) in Snowflake → sized like NUMBER(38,0) (Decimal128).
+    [InlineData("INTEGER", typeof(Decimal128Type))]
+    [InlineData("INT", typeof(Decimal128Type))]
+    [InlineData("BIGINT", typeof(Decimal128Type))]
     [InlineData("FLOAT", typeof(FloatType))]
     [InlineData("DOUBLE", typeof(DoubleType))]
     [InlineData("REAL", typeof(DoubleType))]

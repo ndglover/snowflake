@@ -70,9 +70,6 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
     private const string TimestampLtzLogicalType = "TIMESTAMP_LTZ";
     private const string TimestampTzLogicalType = "TIMESTAMP_TZ";
 
-    private const string EpochFieldName = "epoch";
-    private const string FractionFieldName = "fraction";
-
     private const string Utc = "UTC";
 
     // Largest decimal precision guaranteed to fit each integer width: Int32 holds 9 full digits
@@ -166,9 +163,12 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
                 case TimestampLtzLogicalType:
                 case TimestampTzLogicalType:
                 {
+                    // TZ carries a per-row offset field (dropped — we store the UTC instant); NTZ
+                    // has no zone, LTZ/TZ are tagged UTC.
+                    bool hasTimezoneField = logicalType == TimestampTzLogicalType;
                     string? timezone = logicalType == TimestampNtzLogicalType ? null : Utc;
                     var target = new TimestampType(TimeUnit.Nanosecond, timezone);
-                    transforms.Add(new ColumnTransform(i, source => ConvertTimestamp(source, target, columnScale)));
+                    transforms.Add(new ColumnTransform(i, source => ConvertTimestamp(source, target, columnScale, hasTimezoneField)));
                     outField = new Field(field.Name, target, field.IsNullable, field.Metadata);
                     break;
                 }
@@ -280,7 +280,7 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
         return new Time64Array(type, values, validity, source.Length, nullCount, 0);
     }
 
-    private static TimestampArray ConvertTimestamp(IArrowArray source, TimestampType type, int scale)
+    private static TimestampArray ConvertTimestamp(IArrowArray source, TimestampType type, int scale, bool hasTimezoneField)
     {
         long multiplier = PowerOfTen(9 - scale);
 
@@ -289,18 +289,18 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
 
         if (source is StructArray structArray)
         {
-            var structType = (StructType)structArray.Data.DataType;
-            int epochIndex = Math.Max(0, FieldIndex(structType, EpochFieldName));
-            int fractionIndex = FieldIndex(structType, FractionFieldName);
-
-            var epoch = (Int64Array)structArray.Fields[epochIndex];
-            Int32Array? fraction = fractionIndex >= 0 ? (Int32Array)structArray.Fields[fractionIndex] : null;
+            // Field 0 is always the epoch. A timezone-carrying value's trailing field is the
+            // per-row offset, which we drop (the stored value is the UTC instant). A separate
+            // nanosecond fraction sits at field 1 for every shape except the 2-field timezone
+            // struct, where the epoch already holds the whole timestamp in 10^-scale units. The
+            // shape is determined by the known logical type + field count, never by field names.
+            var epoch = (Int64Array)structArray.Fields[0];
+            bool hasFraction = !hasTimezoneField || structArray.Fields.Count >= 3;
+            Int32Array? fraction = hasFraction ? (Int32Array)structArray.Fields[1] : null;
 
             isNull = structArray.IsNull;
             nanoseconds = fraction != null
-                // epoch is seconds and fraction is the sub-second part in nanoseconds.
                 ? i => epoch.Values[i] * NanosecondsPerSecond + (long)fraction.Values[i] * multiplier
-                // no fraction field: epoch holds the whole timestamp in 10^-scale units.
                 : i => epoch.Values[i] * multiplier;
         }
         else
@@ -338,17 +338,6 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
         }
 
         return (values.Build(), validity.Build(), nullCount);
-    }
-
-    private static int FieldIndex(StructType type, string name)
-    {
-        for (int i = 0; i < type.Fields.Count; i++)
-        {
-            if (string.Equals(type.Fields[i].Name, name, StringComparison.OrdinalIgnoreCase))
-                return i;
-        }
-
-        return -1;
     }
 
     private static long PowerOfTen(int exponent)

@@ -46,8 +46,9 @@ internal class TypeConverter : ITypeConverter
         {
             SnowflakeTypeCode.Boolean => BooleanType.Default,
 
-            SnowflakeTypeCode.Integer => Int64Type.Default,
-
+            // INTEGER/INT/BIGINT/SMALLINT/TINYINT/BYTEINT are all NUMBER(38,0) in Snowflake, so
+            // they size by precision the same way FIXED/NUMBER does.
+            SnowflakeTypeCode.Integer or
             SnowflakeTypeCode.Number => FixedToArrowType(
                 snowflakeType.Precision.GetValueOrDefault(38),
                 snowflakeType.Scale.GetValueOrDefault(0)),
@@ -232,7 +233,7 @@ internal class TypeConverter : ITypeConverter
         return dataType.TypeCode switch
         {
             SnowflakeTypeCode.Boolean => BuildBooleanArray(values),
-            SnowflakeTypeCode.Integer => BuildInt64Array(values),
+            SnowflakeTypeCode.Integer or
             SnowflakeTypeCode.Number => BuildFixedArray(values, dataType),
             SnowflakeTypeCode.Float => BuildFloatArray(values),
             SnowflakeTypeCode.Double => BuildDoubleArray(values),

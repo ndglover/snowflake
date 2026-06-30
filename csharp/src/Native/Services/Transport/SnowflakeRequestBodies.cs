@@ -69,6 +69,39 @@ internal sealed class SnowflakeCancelRequestBody
 }
 
 /// <summary>
+/// Request body for renewing an expired session token via <c>/session/token-request</c>. The
+/// request is authenticated with the master token (not the expired session token).
+/// </summary>
+internal sealed class SnowflakeRenewSessionBody
+{
+    [JsonPropertyName("oldSessionToken")]
+    public string? OldSessionToken { get; init; }
+
+    [JsonPropertyName("requestType")]
+    public string RequestType { get; init; } = "RENEW";
+}
+
+/// <summary>
+/// Data returned by <c>/session/token-request</c>: the fresh session token (and refreshed master
+/// token) with their validity windows.
+/// </summary>
+internal sealed class SnowflakeRenewSessionData
+{
+    [JsonPropertyName("sessionToken")]
+    public string? SessionToken { get; init; }
+
+    // Session-token validity ("ST"); the renew endpoint names it differently from the login response.
+    [JsonPropertyName("validityInSecondsST")]
+    public int ValidityInSeconds { get; init; }
+
+    [JsonPropertyName("masterToken")]
+    public string? MasterToken { get; init; }
+
+    [JsonPropertyName("validityInSecondsMT")]
+    public int MasterValidityInSeconds { get; init; }
+}
+
+/// <summary>
 /// Request body for a metadata listing request.
 /// </summary>
 internal sealed class SnowflakeMetadataRequestBody

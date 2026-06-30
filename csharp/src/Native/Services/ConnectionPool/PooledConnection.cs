@@ -39,6 +39,7 @@ internal class PooledConnection : IPooledConnection
 {
     private DateTimeOffset _lastUsedAt;
     private bool _disposed;
+    private readonly Func<Task>? _sessionCloser;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PooledConnection"/> class.
@@ -46,16 +47,22 @@ internal class PooledConnection : IPooledConnection
     /// <param name="connectionId">The connection ID.</param>
     /// <param name="authToken">The authentication token.</param>
     /// <param name="config">The connection configuration.</param>
+    /// <param name="sessionCloser">
+    /// Optional best-effort callback that closes the server-side Snowflake session; invoked when the
+    /// pool discards this connection (not when it is returned to the idle pool for reuse).
+    /// </param>
     public PooledConnection(
         string connectionId,
         AuthenticationToken authToken,
-        ConnectionConfig config)
+        ConnectionConfig config,
+        Func<Task>? sessionCloser = null)
     {
         ConnectionId = connectionId ?? throw new ArgumentNullException(nameof(connectionId));
         AuthToken = authToken ?? throw new ArgumentNullException(nameof(authToken));
         Config = config ?? throw new ArgumentNullException(nameof(config));
         CreatedAt = DateTimeOffset.UtcNow;
         _lastUsedAt = CreatedAt;
+        _sessionCloser = sessionCloser;
     }
 
     public string ConnectionId { get; }
@@ -90,6 +97,21 @@ internal class PooledConnection : IPooledConnection
             return;
 
         _disposed = true;
+
+        // Best-effort: close the server-side session so it isn't orphaned until it times out.
+        // Bounded so a slow/hung close can't stall teardown; a failure just lets the session expire.
+        if (_sessionCloser != null)
+        {
+            try
+            {
+                _sessionCloser().Wait(TimeSpan.FromSeconds(5));
+            }
+            catch
+            {
+                // ignore — closing the session is best-effort
+            }
+        }
+
         GC.SuppressFinalize(this);
     }
 }

@@ -141,7 +141,6 @@ internal static class IntegrationTestingUtils
 
     private static string Parameter(string? value, string parameterName)
     {
-        if (value == null) throw new ArgumentNullException(parameterName);
-        return value;
+        return value ?? throw new ArgumentNullException(parameterName);
     }
 }

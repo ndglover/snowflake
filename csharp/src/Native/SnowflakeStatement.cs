@@ -145,6 +145,10 @@ public sealed class SnowflakeStatement : AdbcStatement
             // Convert to ADBC QueryResult
             return new QueryResult(result.RowCount, result.ResultStream);
         }
+        catch (AdbcException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             throw new AdbcException($"Query execution failed: {ex.Message}", ex);

@@ -28,7 +28,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Apache.Arrow.Ipc;
 using AdbcDrivers.Snowflake.Native.Configuration;
-using AdbcDrivers.Snowflake.Native.Services;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 using AdbcDrivers.Snowflake.Native.Services.Transport;
 using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
@@ -51,7 +50,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     private readonly IConnectionPoolManager _connectionPool;
     private readonly Dictionary<string, string> _options;
     private IPooledConnection? _pooledConnection;
-    private IQueryExecutor? _queryExecutor;
+    private readonly IQueryExecutor? _queryExecutor;
     private bool _disposed;
     private readonly ILogger<SnowflakeConnection> _logger;
 
@@ -108,6 +107,38 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             throw new InvalidOperationException("Connection is not properly initialized.");
 
         return new SnowflakeStatement(_config, _pooledConnection, _queryExecutor);
+    }
+
+    /// <summary>
+    /// The session's authentication token (session/master tokens). Exposed for tests and proactive
+    /// session management (e.g. heartbeat).
+    /// </summary>
+    internal Services.Authentication.AuthenticationToken? AuthToken => _pooledConnection?.AuthToken;
+
+    /// <summary>
+    /// Proactively renews this connection's session token using the master token.
+    /// </summary>
+    internal Task RenewSessionAsync(System.Threading.CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        if (_pooledConnection == null || _queryExecutor == null)
+            throw new InvalidOperationException("Connection is not properly initialized.");
+
+        return _queryExecutor.RenewSessionAsync(_pooledConnection.AuthToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Pings the session heartbeat endpoint to keep this connection's session alive.
+    /// </summary>
+    internal Task HeartbeatAsync(System.Threading.CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        if (_pooledConnection == null || _queryExecutor == null)
+            throw new InvalidOperationException("Connection is not properly initialized.");
+
+        return _queryExecutor.HeartbeatAsync(_pooledConnection.AuthToken, cancellationToken);
     }
 
     /// <summary>
@@ -230,22 +261,20 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         const int stringValueTypeId = 0;
 
         var infoUnionType = new UnionType(
-            new Field[]
-            {
+            [
                 new Field("string_value", StringType.Default, true),
                 new Field("bool_value", BooleanType.Default, true),
                 new Field("int64_value", Int64Type.Default, true),
                 new Field("int32_bitmask", Int32Type.Default, true),
                 new Field("string_list", new ListType(new Field("item", StringType.Default, true)), false),
                 new Field("int32_to_int32_list_map",
-                    new ListType(new Field("entries", new StructType(new Field[]
-                    {
+                    new ListType(new Field("entries", new StructType([
                         new Field("key", Int32Type.Default, false),
                         new Field("value", Int32Type.Default, true)
-                    }), false)),
+                    ]), false)),
                     true)
-            },
-            new[] { 0, 1, 2, 3, 4, 5 },
+            ],
+            [0, 1, 2, 3, 4, 5],
             UnionMode.Dense);
 
         var infoNameBuilder = new UInt32Array.Builder();
@@ -280,16 +309,15 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             }
         }
 
-        var entryType = new StructType(new Field[]
-        {
+        var entryType = new StructType([
             new Field("key", Int32Type.Default, false),
             new Field("value", Int32Type.Default, true)
-        });
+        ]);
 
         var entriesDataArray = new StructArray(
             entryType,
             0,
-            new[] { new Int32Array.Builder().Build(), new Int32Array.Builder().Build() },
+            [new Int32Array.Builder().Build(), new Int32Array.Builder().Build()],
             new ArrowBuffer.BitmapBuilder().Build());
 
         IArrowArray[] childArrays =
@@ -349,7 +377,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
                 _connectionPool.ReleaseConnection(_pooledConnection);
                 _pooledConnection = null;
             }
-            _logger.LogDebug("Disposing SnowflakeConnection for user {User}", _config.User);
+            _logger.LogDebug("Disposing SnowflakeConnection for account {Account}", _config.Account);
             _disposed = true;
         }
         base.Dispose();

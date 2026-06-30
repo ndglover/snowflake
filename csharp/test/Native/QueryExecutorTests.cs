@@ -22,7 +22,9 @@
 */
 
 using System.Collections.Generic;
+using System.Text.Json;
 using AdbcDrivers.Snowflake.Native.Services.Query;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Xunit;
 
 namespace AdbcDrivers.Snowflake.Native.Tests;
@@ -92,5 +94,31 @@ public class QueryExecutorTests
     {
         Assert.False(QueryExecutor.TryGetDmlAffectedRows(new SnowflakeQueryResponse(), out long affected));
         Assert.Equal(0, affected);
+    }
+
+    [Fact]
+    public void IsSessionExpired_TrueForExpiredTokenCode()
+    {
+        var response = new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "390112" };
+        Assert.True(QueryExecutor.IsSessionExpired(response));
+    }
+
+    [Theory]
+    [InlineData(true, "390112")]  // a successful response is never "expired", whatever the code
+    [InlineData(false, "000")]    // a different (non-session-expired) error
+    [InlineData(false, null)]     // no code at all
+    public void IsSessionExpired_FalseOtherwise(bool success, string? code)
+    {
+        var response = new ApiResponse<SnowflakeQueryResponse> { Success = success, Code = code };
+        Assert.False(QueryExecutor.IsSessionExpired(response));
+    }
+
+    [Fact]
+    public void RenewSessionBody_SerializesAsRenewRequest()
+    {
+        string json = JsonSerializer.Serialize(new SnowflakeRenewSessionBody { OldSessionToken = "old-token" });
+
+        Assert.Contains("\"oldSessionToken\":\"old-token\"", json);
+        Assert.Contains("\"requestType\":\"RENEW\"", json);
     }
 }

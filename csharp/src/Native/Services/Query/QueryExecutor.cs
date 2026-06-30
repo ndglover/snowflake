@@ -27,7 +27,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.Snowflake.Native.Services;
+using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.Transport;
 using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 using Microsoft.Extensions.Logging;
@@ -46,7 +46,14 @@ internal class QueryExecutor : IQueryExecutor
     private readonly ITypeConverter _typeConverter;
     private readonly string _accountUrl;
     private readonly ILogger<QueryExecutor> _logger;
+    // Serializes session renewal on this connection so concurrent statements don't double-renew.
+    private readonly SemaphoreSlim _renewLock = new(1, 1);
     private const string QueryEndpoint = "/queries/v1/query-request";
+    private const string TokenRequestEndpoint = "/session/token-request";
+    private const string HeartbeatEndpoint = "/session/heartbeat";
+
+    // GS error code Snowflake returns when the session token has expired.
+    const string SessionExpiredCode = "390112";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="QueryExecutor"/> class.
@@ -89,12 +96,7 @@ internal class QueryExecutor : IQueryExecutor
 
         try
         {
-            var queryRequest = BuildQueryRequest(request, out string endpoint);
-            var response = await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
-                endpoint,
-                queryRequest,
-                authToken,
-                cancellationToken);
+            var response = await PostQueryWithRenewalAsync(request, describeOnly: false, authToken, cancellationToken).ConfigureAwait(false);
 
             stopwatch.Stop();
 
@@ -141,14 +143,14 @@ internal class QueryExecutor : IQueryExecutor
             {
                 Status = QueryStatus.Failed,
                 ExecutionTime = stopwatch.Elapsed,
-                Errors = new List<QueryError>
-                {
-                    new QueryError
+                Errors =
+                [
+                    new QueryError()
                     {
                         ErrorCode = "EXECUTION_ERROR",
                         Message = $"Query execution failed: {ex.Message}"
                     }
-                }
+                ]
             };
         }
     }
@@ -265,12 +267,7 @@ internal class QueryExecutor : IQueryExecutor
         // Snowflake's internal protocol has no dedicated prepare endpoint; a statement is
         // described (compiled without executing) by sending it to the query-request endpoint
         // with describeOnly=true. The response's rowtype is the result schema.
-        var describeRequest = BuildQueryRequest(request, out string endpoint, describeOnly: true);
-        var response = await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
-            endpoint,
-            describeRequest,
-            request.AuthToken,
-            cancellationToken).ConfigureAwait(false);
+        var response = await PostQueryWithRenewalAsync(request, describeOnly: true, request.AuthToken, cancellationToken).ConfigureAwait(false);
 
         if (!response.Success || response.Data == null)
             throw new AdbcException($"Failed to describe statement: {response.Message ?? "Unknown error"}");
@@ -335,6 +332,121 @@ internal class QueryExecutor : IQueryExecutor
         return queryRequest;
     }
 
+    /// <summary>
+    /// Posts a query/describe request and, if Snowflake reports the session token has expired,
+    /// renews it with the master token and retries the request once (with a fresh request id).
+    /// </summary>
+    private async Task<ApiResponse<SnowflakeQueryResponse>> PostQueryWithRenewalAsync(
+        QueryRequest request, bool describeOnly, AuthenticationToken authToken, CancellationToken cancellationToken)
+    {
+        var body = BuildQueryRequest(request, out string endpoint, describeOnly);
+        // The session token this attempt authenticates with; renewal only proceeds if it's still
+        // current (so concurrent statements don't each renew after the same expiry).
+        string? tokenUsed = authToken.SessionToken;
+        var response = await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
+            endpoint, body, authToken, cancellationToken).ConfigureAwait(false);
+
+        if (!IsSessionExpired(response) || string.IsNullOrEmpty(authToken.MasterToken))
+            return response;
+
+        _logger.LogDebug("Snowflake session token expired (code {Code}); renewing and retrying.", response.Code);
+        await RenewSessionCoreAsync(authToken, renewIfSessionTokenIs: tokenUsed, cancellationToken).ConfigureAwait(false);
+
+        // Rebuild with a fresh request id so the retry is not treated as a duplicate of the
+        // request that was rejected for the expired token.
+        body = BuildQueryRequest(request, out endpoint, describeOnly);
+        return await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
+            endpoint, body, authToken, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// True when a response indicates the session token has expired (GS code 390112).
+    /// </summary>
+    internal static bool IsSessionExpired(ApiResponse<SnowflakeQueryResponse> response) =>
+        response is { Success: false } && string.Equals(response.Code, SessionExpiredCode, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Renews an expired session token in place via <c>/session/token-request</c>. Snowflake issues
+    /// a short-lived session token (~1h) backed by a longer master token (~4h); when the session
+    /// token expires the still-valid master token mints a new one. The renewal request is itself
+    /// authenticated with the master token.
+    /// </summary>
+    /// <inheritdoc/>
+    public async Task HeartbeatAsync(AuthenticationToken authToken, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(authToken);
+
+        var requestId = Guid.NewGuid().ToString();
+        var requestGuid = Guid.NewGuid().ToString();
+        var endpoint = $"{_accountUrl}{HeartbeatEndpoint}?requestId={requestId}&request_guid={requestGuid}";
+
+        var response = await _apiClient.PostAsync<object, SnowflakeQueryResponse>(
+            endpoint, new object(), authToken, cancellationToken).ConfigureAwait(false);
+
+        // The heartbeat keeps the session alive; if the session token has already expired the
+        // heartbeat itself comes back 390112, so renew with the master token.
+        if (IsSessionExpired(response))
+        {
+            if (!string.IsNullOrEmpty(authToken.MasterToken))
+                await RenewSessionAsync(authToken, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!response.Success)
+            throw new AdbcException($"Snowflake heartbeat failed (code {response.Code ?? "unknown"}).");
+    }
+
+    /// <inheritdoc/>
+    public Task RenewSessionAsync(AuthenticationToken authToken, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(authToken);
+        // Proactive renewal (e.g. heartbeat): renew unconditionally.
+        return RenewSessionCoreAsync(authToken, renewIfSessionTokenIs: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Renews the session token under a per-connection lock so concurrent statements serialize.
+    /// When <paramref name="renewIfSessionTokenIs"/> is non-null, the renewal is skipped if the
+    /// session token has already changed (another caller renewed it after the same expiry) — the
+    /// caller then just retries with the current token. Mirrors gosnowflake's renewal guard.
+    /// </summary>
+    private async Task RenewSessionCoreAsync(AuthenticationToken authToken, string? renewIfSessionTokenIs, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(authToken.MasterToken))
+            throw new AdbcException("Cannot renew the Snowflake session: no master token is available.");
+
+        await _renewLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (renewIfSessionTokenIs != null && authToken.SessionToken != renewIfSessionTokenIs)
+                return;
+
+            var requestId = Guid.NewGuid().ToString();
+            var requestGuid = Guid.NewGuid().ToString();
+            var endpoint = $"{_accountUrl}{TokenRequestEndpoint}?requestId={requestId}&request_guid={requestGuid}";
+
+            var body = new SnowflakeRenewSessionBody { OldSessionToken = authToken.SessionToken };
+            // Authenticate the renewal with the master token by carrying it in the auth-header slot.
+            var masterAuth = new AuthenticationToken { SessionToken = authToken.MasterToken };
+
+            var response = await _apiClient.PostAsync<SnowflakeRenewSessionBody, SnowflakeRenewSessionData>(
+                endpoint, body, masterAuth, cancellationToken).ConfigureAwait(false);
+
+            if (!response.Success || string.IsNullOrEmpty(response.Data?.SessionToken))
+                throw new AdbcException($"Failed to renew the Snowflake session token (code {response.Code ?? "unknown"}).");
+
+            authToken.SessionToken = response.Data.SessionToken;
+            if (!string.IsNullOrEmpty(response.Data.MasterToken))
+                authToken.MasterToken = response.Data.MasterToken;
+            if (response.Data.ValidityInSeconds > 0)
+                authToken.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(response.Data.ValidityInSeconds);
+        }
+        finally
+        {
+            _renewLock.Release();
+        }
+    }
+
     /// <inheritdoc/>
     public async Task<QueryResult> ExecutePreparedStatementAsync(
         PreparedStatement statement,
@@ -355,7 +467,7 @@ internal class QueryExecutor : IQueryExecutor
     }
 
     /// <inheritdoc/>
-    public async Task CancelQueryAsync(string queryId, CancellationToken cancellationToken = default)
+    public Task CancelQueryAsync(string queryId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(queryId);
 

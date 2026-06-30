@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AdbcDrivers.Snowflake.Native.Tests" />
+    <InternalsVisibleTo Include="AdbcDrivers.Snowflake.SessionHarness" />
   </ItemGroup>
 
   <ItemGroup>

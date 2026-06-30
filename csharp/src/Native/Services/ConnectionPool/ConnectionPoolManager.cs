@@ -41,6 +41,7 @@ namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 {
     private readonly IAuthenticationService _authService;
+    private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionCloser;
     private readonly ConcurrentDictionary<string, ConnectionPoolEntry> _pools;
     private readonly CancellationTokenSource _cts = new();
     private readonly object _cleanupStartLock = new();
@@ -54,9 +55,16 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
     /// Initializes a new instance of the <see cref="ConnectionPoolManager"/> class.
     /// </summary>
     /// <param name="authService">The authentication service.</param>
-    public ConnectionPoolManager(IAuthenticationService authService)
+    /// <param name="sessionCloser">
+    /// Optional best-effort callback to close a connection's server-side session when the pool
+    /// discards it (so sessions aren't orphaned until they time out).
+    /// </param>
+    public ConnectionPoolManager(
+        IAuthenticationService authService,
+        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionCloser = null)
     {
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
+        _sessionCloser = sessionCloser;
         _pools = new ConcurrentDictionary<string, ConnectionPoolEntry>();
     }
 
@@ -65,13 +73,12 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        if (config == null)
-            throw new ArgumentNullException(nameof(config));
+        ArgumentNullException.ThrowIfNull(config);
 
         EnsureCleanupStarted();
 
         var poolKey = GeneratePoolKey(config);
-        var poolEntry = _pools.GetOrAdd(poolKey, _ => new ConnectionPoolEntry(config));
+        var poolEntry = _pools.GetOrAdd(poolKey, static (_, cfg) => new ConnectionPoolEntry(cfg), config);
 
         if (TryAcquireIdleConnection(poolEntry, out var idleConnection))
             return idleConnection!;
@@ -167,7 +174,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         _disposed = true;
 
         _cts.Cancel();
-        _cts.Dispose();
 
         if (_cleanupTask != null)
         {
@@ -175,10 +181,14 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
             {
                 _cleanupTask.Wait(TimeSpan.FromSeconds(5));
             }
-            catch (OperationCanceledException)
+            catch (AggregateException)
             {
+                // The cleanup loop observed cancellation while shutting down — expected.
             }
         }
+
+        // Dispose the CTS only after the cleanup loop has stopped using its token.
+        _cts.Dispose();
 
         foreach (var poolEntry in _pools.Values)
         {
@@ -195,24 +205,22 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 
     private void EnsureCleanupStarted()
     {
-        if (_cleanupTask == null)
+        if (_cleanupTask != null) return;
+        lock (_cleanupStartLock)
         {
-            lock (_cleanupStartLock)
-            {
-                if (_cleanupTask == null)
-                {
-                    _cleanupTask = CleanupLoopAsync();
-                }
-            }
+            _cleanupTask ??= CleanupLoopAsync();
         }
     }
 
     private async Task CleanupLoopAsync()
     {
         var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        // Capture the token once: re-reading _cts.Token each iteration races with Dispose() and
+        // throws ObjectDisposedException once the CTS is disposed.
+        CancellationToken token = _cts.Token;
         try
         {
-            while (await timer.WaitForNextTickAsync(_cts.Token))
+            while (await timer.WaitForNextTickAsync(token))
             {
                 try
                 {
@@ -284,7 +292,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         return new PooledConnection(
             Guid.NewGuid().ToString(),
             authToken,
-            config);
+            config,
+            _sessionCloser == null ? null : () => _sessionCloser(authToken, config, CancellationToken.None));
     }
 
     private static string GeneratePoolKey(ConnectionConfig config)

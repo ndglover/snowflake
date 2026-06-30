@@ -65,7 +65,9 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         var ssoAuth = new SsoAuthenticator(loginClient, _httpClient);
 
         var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, ssoAuth);
-        _connectionPool = new ConnectionPoolManager(authService);
+        _connectionPool = new ConnectionPoolManager(
+            authService,
+            loginClient.CloseSessionAsync);
     }
 
     private static NetworkConfig ParseNetworkFromParameters(IReadOnlyDictionary<string, string>? parameters)

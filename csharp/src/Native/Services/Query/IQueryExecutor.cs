@@ -56,6 +56,27 @@ internal interface IQueryExecutor
     Task<PreparedStatement> DescribeAsync(QueryRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Mints a fresh session token from the master token (<c>POST /session/token-request</c>),
+    /// replacing the token's session token in place. Queries do this automatically when they hit a
+    /// session-expired response; it's exposed for explicit/proactive renewal and for tests.
+    /// Distinct from <see cref="HeartbeatAsync"/>, which keeps the existing session alive and only
+    /// renews as a fallback.
+    /// </summary>
+    /// <param name="authToken">The token to renew; its session token is replaced in place.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task RenewSessionAsync(AuthenticationToken authToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Keeps the session alive by pinging <c>/session/heartbeat</c> with the current session token
+    /// (resets the server-side idle clock — it does <i>not</i> mint a new token). If the session has
+    /// already expired it falls back to <see cref="RenewSessionAsync"/>. Intended for a periodic
+    /// keep-alive timer so long-idle connections never reach master-token expiry.
+    /// </summary>
+    /// <param name="authToken">The session's authentication token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task HeartbeatAsync(AuthenticationToken authToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Executes a prepared statement with parameters.
     /// </summary>
     /// <param name="statement">The prepared statement.</param>

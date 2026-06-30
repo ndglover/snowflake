@@ -30,8 +30,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using AdbcDrivers.Snowflake.Native.Configuration;
-using AdbcDrivers.Snowflake.Native.Services;
-
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
@@ -41,10 +39,11 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 /// </summary>
 internal class SnowflakeLoginClient
 {
-    private readonly HttpClient _httpClient;
+    readonly HttpClient _httpClient;
 
-    internal const string LoginEndpoint = "/session/v1/login-request";
+    const string LoginEndpoint = "/session/v1/login-request";
     internal const string AuthenticatorEndpoint = "/session/authenticator-request";
+    const string SessionEndpoint = "/session";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SnowflakeLoginClient"/> class.
@@ -117,6 +116,29 @@ internal class SnowflakeLoginClient
         {
             throw new AdbcException($"Failed to parse Snowflake authentication response: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Best-effort close of a Snowflake session (<c>POST /session?delete=true</c>) so it is not
+    /// left orphaned on the server until it times out. Failures are ignored — an un-closed session
+    /// simply expires naturally.
+    /// </summary>
+    internal async Task CloseSessionAsync(AuthenticationToken token, ConnectionConfig config, CancellationToken cancellationToken = default)
+    {
+        // Nothing to close without a session token (it can legitimately be null/empty).
+        if (string.IsNullOrEmpty(token.SessionToken))
+            return;
+
+        var accountUrl = SnowflakeAccountUrl.Build(config.Account, config.Network);
+        var requestId = Guid.NewGuid().ToString();
+        var requestGuid = Guid.NewGuid().ToString();
+        var url = $"{accountUrl}{SessionEndpoint}?delete=true&requestId={requestId}&request_guid={requestGuid}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.TryAddWithoutValidation("Authorization", $"Snowflake Token=\"{token.SessionToken}\"");
+        request.Headers.TryAddWithoutValidation("Accept", "application/snowflake");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -1,35 +1,48 @@
 # Native C# Snowflake ADBC Driver — TODO
 
-Issues identified during code review. Resolve as we go.
+Issues to resolve before considering the driver production-ready. Tiered by impact.
+Last reconciled 2026-06-29.
 
-## Bugs
+## Tier 1 — Blockers (correctness / leaks / missing core)
 
-- [ ] **SnowflakeStatement double-wraps exceptions** — The catch-all `catch (Exception ex)` in `ExecuteQueryAsync` wraps `AdbcException` inside another `AdbcException`. Should rethrow `AdbcException` directly.
-- [ ] **SnowflakeTestingUtils OAuth user null reference** — The OAuth branch in `GetSnowflakeAdbcDriver` calls `Parameter(OAuth.User, "user")` which throws if user is empty/null. Guard with a null check since user is optional for OAuth.
+- [ ] **PooledConnection doesn't close the Snowflake session** — `Dispose()` sends no `DELETE /session`, so every discarded connection leaks a live server-side session until it times out (~4h). Under connection churn this hits account session limits. Close on the pool's discard path (`PooledConnection.Dispose`). *(in progress)*
+- [ ] **Master-token expiry recovery** — Reactive renewal works (verified live), but once the master expires (idle > ~4h) the renewal POST returns **`390114`** and the query fails (confirmed live, 8h harness run). **Reference-aligned fix (NOT re-login):** both gosnowflake and connector-net just propagate the renewal error on master expiry — neither auto-re-logins. The reference recovery is (a) **auto-heartbeat** gated on `CLIENT_SESSION_KEEP_ALIVE` to *prevent* reaching expiry (background timer, renew-on-390112, endpoint already built), and (b) surface `390114` as an identifiable error so the app/pool reconnects (the pool should already evict the connection on release via `IsTokenExpired`). Also adopt gosnowflake's renewal **lock** + "renew only if the token is still the expired one" to dedupe concurrent renewals (covers the unsynchronized-token-mutation item below).
+- [ ] **Query cancellation — `NotImplementedException`** (`QueryExecutor.CancelQueryAsync`) — no way to abort a runaway query server-side.
 
-## Resource Management
+## Tier 2 — Important (robustness / correctness)
 
-- [ ] **SnowflakeDatabase doesn't dispose HttpClient** — When the database creates its own `HttpClient` (not injected), it should dispose it in `Dispose()`.
-- [ ] **PooledConnection doesn't close Snowflake session** — No `/session` DELETE request on dispose. Orphaned sessions accumulate on the server.
+- [ ] **Transactions — `NotImplementedException`** (`SnowflakeConnection.Commit`/`Rollback`) — autocommit only. Blocker *if* consumers need explicit transactions (scope decision).
+- [ ] **Bind-parameter type coverage** — `TypeConverter.ToBinding` maps only TEXT/FIXED/REAL/BOOLEAN; DATE/TIME/TIMESTAMP/DECIMAL/BINARY fall through to `Convert.ToString` as TEXT (silently wrong — a `byte[]` binds as `"System.Byte[]"`). Implement them or throw `NotSupportedException` instead of binding garbage.
+- [ ] **SnowflakeDatabase doesn't dispose its HttpClient** — when it creates its own (not injected), track ownership and dispose it in `Dispose()`.
 
-## Consistency
+## Tier 3 — Hygiene / decisions
 
-- [ ] **Inconsistent exception types across authenticators** — `BasicAuthenticator` throws `AdbcException`, others throw `InvalidOperationException`. Standardize on `AdbcException`.
-- [ ] **Two `ParameterSet` classes with conflicting nullability** — `TypeConversion/ParameterSet.cs` uses `Dictionary<string, object?>`, `Query/IQueryExecutor.cs` uses `Dictionary<string, object>`. Consolidate.
+- [ ] **`AuthenticationService._tokenCache` is never populated** — dead code; implement caching or remove.
+- [ ] **Login `ExpiresAt` tracks master (4h), not session (~1h)** — so `PooledConnection.IsTokenExpired` is inaccurate (reactive renewal masks it, but pool eviction is built on a wrong number). Capture the session `validityInSeconds`.
+- [ ] **Inconsistent exception types across authenticators** — `BasicAuthenticator` throws `AdbcException`, others `InvalidOperationException`. Standardize on `AdbcException`.
+- [ ] **`ssl_skip_verify` footgun** — wires `DangerousAcceptAnyServerCertificateValidator`; make it hard to enable accidentally (warn/log loudly; document test-only).
+- [ ] **SsoAuthenticator hardcodes port 8080** — no fallback if in use; use an OS-assigned port or try several.
+- [ ] **No consumer logging path** — `ILogger` is used internally but there's no easy way for a consumer to plug in logging (hit this with the session harness). Needed for prod diagnostics.
+- [ ] **Secret-logging audit** — confirm no token is ever logged at any level.
+- [ ] **GetParameterSchema — `NotImplementedException`** — by design (Snowflake doesn't report bind types); document it rather than leave it looking unfinished.
 
-## Dead Code / Incomplete
+## Scope decisions (confirm whether in scope for v1)
 
-- [ ] **AuthenticationService._tokenCache is never populated** — The `ConcurrentDictionary` is created but tokens are never added. Either implement caching or remove.
-- [ ] **QueryExecutor.CancelQueryAsync throws NotImplementedException** — Either implement or remove from interface until ready.
+- [ ] PUT/GET stage file transfer, multi-statement, async queries, stored-procedure result handling — currently unsupported.
 
-## Resilience
+## Resolved
 
-- [ ] **RestApiClient doesn't handle 401 (token expired)** — Transient error detection only covers 408/429/503/504. An expired token mid-session won't trigger refresh/retry.
-- [ ] **SsoAuthenticator hardcodes port 8080** — No fallback if port is in use. Should use OS-assigned port or try multiple.
+- [x] **Renewal not synchronized** — renewal now runs under a per-connection `SemaphoreSlim` and skips if the session token already changed (gosnowflake's "renew only if still the expired token" guard), so concurrent statements don't double-renew.
+- [x] **Orphaned server sessions** — `PooledConnection.Dispose` now best-effort closes the session (`POST /session?delete=true`) via a closer wired from `SnowflakeDatabase` through the pool; fires when the pool discards a connection (incl. pool/database dispose).
+- [x] **SnowflakeStatement double-wraps exceptions** — added `catch (AdbcException) { throw; }` in `ExecuteQueryAsync` (matching `ExecuteUpdateAsync`).
+- [x] **401-on-token-expiry concern** — resolved by evidence: an 8h-idle harness run showed both session-expiry (390112) and master-expiry (390114) come back as **HTTP 200 + GS code in the body**, so `EnsureSuccessStatusCode` doesn't pre-empt detection. (A 401 path may still exist for other auth failures, but not for the token-expiry/renewal flow.)
+- [x] **RequestBuilder returns a typed model** — now returns `SnowflakeQueryRequestBody`/etc.
+- [x] **ClientTests / ClientIntegrationTests overlap** — `ClientIntegrationTests` deleted; ClientTests rewritten to the ADO.NET client layer.
+- [x] **`TypeConversion.ParameterSet` nullability** — now `Dictionary<string, SnowflakeBinding>` (positional bind keys + typed values).
+- [x] **Reactive session renewal** — implemented (`QueryExecutor.PostQueryWithRenewalAsync`) and verified live over 6+ hours.
+- [x] **GetObjects SQL injection** — switched to bind parameters.
+- [x] **Result type decoding** — precision-driven NUMBER, scaled decimal, TIME, TIMESTAMP; describe↔result reconciled.
 
-## Style / Minor
+## Notes
 
-- [ ] **SnowflakeConnection typo in comment** — `/// <summary>AdbcDatabaseAdbcDatabase`
-- [ ] **RequestBuilder returns `object`** — Should return a typed request model for testability.
-- [ ] **ConnectionPoolEntry mixes primary constructor with mutable field** — Consider using a regular constructor for clarity.
-- [ ] **ClientTests and ClientIntegrationTests overlap** — Consider consolidating into one test class.
+- `SnowflakeConnection` comment typo (`AdbcDatabaseAdbcDatabase`) and `ConnectionPoolEntry` primary-ctor + mutable field — trivial, fold into the next pass over those files.

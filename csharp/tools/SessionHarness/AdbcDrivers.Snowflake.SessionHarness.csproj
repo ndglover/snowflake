@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Dev tool, not shipped; don't fail the long-running harness on style warnings. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AssemblyName>AdbcDrivers.Snowflake.SessionHarness</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Native\AdbcDrivers.Snowflake.Native.csproj" />
+  </ItemGroup>
+
+</Project>

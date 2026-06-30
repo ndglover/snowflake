@@ -11,7 +11,6 @@ Last reconciled 2026-06-29.
 ## Tier 2 — Important (robustness / correctness)
 
 - [ ] **Transactions — `NotImplementedException`** (`SnowflakeConnection.Commit`/`Rollback`) — autocommit only. Blocker *if* consumers need explicit transactions (scope decision).
-- [ ] **Bind-parameter type coverage** — `TypeConverter.ToBinding` maps only TEXT/FIXED/REAL/BOOLEAN; DATE/TIME/TIMESTAMP/DECIMAL/BINARY fall through to `Convert.ToString` as TEXT (silently wrong — a `byte[]` binds as `"System.Byte[]"`). Implement them or throw `NotSupportedException` instead of binding garbage.
 
 ## Tier 3 — Hygiene / decisions
 
@@ -30,6 +29,7 @@ Last reconciled 2026-06-29.
 
 ## Resolved
 
+- [x] **Bind-parameter type coverage** — `ToBinding` is keyed off the Arrow array type with correct Snowflake bind formats: DATE = ms since epoch, TIME = ns of day, TIMESTAMP_NTZ/LTZ = ns since epoch, BINARY = lower hex, DECIMAL → FIXED string. It now covers the same scalar set as `ConvertArrowTypeToSnowflake` (describe): Bool, Int8/16/32/64, UInt8/16/32/64, Float, Double, Decimal128/256, String, Binary, Date32/64, Time32/64, Timestamp NTZ/LTZ. Typed nulls keep their column bind type; unmapped types (List/Struct, etc.) throw `NotSupportedException`. Bind cases live in one table (`test/Native/BindCases.cs`) consumed by both the offline format theory (`TypeConverterTests`) and the live round-trip theory (`StatementTests.CanBindParameter`). Known limitation: only row 0 of a bound batch is used — no array/`executemany` binding yet.
 - [x] **SnowflakeDatabase disposes its HttpClient** — tracks `_ownsHttpClient` (true only when it created the client, not when injected) and disposes it in `Dispose()` — after the pool, so in-flight session-closes still have a live client.
 - [x] **Renewal not synchronized** — renewal now runs under a per-connection `SemaphoreSlim` and skips if the session token already changed (gosnowflake's "renew only if still the expired token" guard), so concurrent statements don't double-renew.
 - [x] **Orphaned server sessions** — `PooledConnection.Dispose` now best-effort closes the session (`POST /session?delete=true`) via a closer wired from `SnowflakeDatabase` through the pool; fires when the pool discards a connection (incl. pool/database dispose).

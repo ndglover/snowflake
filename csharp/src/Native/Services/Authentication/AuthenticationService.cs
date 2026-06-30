@@ -42,7 +42,6 @@ internal class AuthenticationService : IAuthenticationService
     private readonly IKeyPairAuthenticator _keyPairAuth;
     private readonly IOAuthAuthenticator _oauthAuth;
     private readonly ISsoAuthenticator _ssoAuth;
-    private readonly ConcurrentDictionary<string, AuthenticationToken> _tokenCache;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AuthenticationService"/> class.
@@ -61,7 +60,6 @@ internal class AuthenticationService : IAuthenticationService
         _keyPairAuth = keyPairAuth ?? throw new ArgumentNullException(nameof(keyPairAuth));
         _oauthAuth = oauthAuth ?? throw new ArgumentNullException(nameof(oauthAuth));
         _ssoAuth = ssoAuth ?? throw new ArgumentNullException(nameof(ssoAuth));
-        _tokenCache = new ConcurrentDictionary<string, AuthenticationToken>();
     }
 
     /// <inheritdoc/>
@@ -141,17 +139,4 @@ internal class AuthenticationService : IAuthenticationService
 
         return await _oauthAuth.RefreshTokenAsync(token.RefreshToken!, cancellationToken);
     }
-
-    /// <inheritdoc/>
-    public void InvalidateToken(AuthenticationToken token)
-    {
-        if (token == null)
-            throw new ArgumentNullException(nameof(token));
-
-        // Remove from cache if present
-        var cacheKey = token.AccessToken;
-        _tokenCache.TryRemove(cacheKey, out _);
-    }
-
-
 }

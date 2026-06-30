@@ -58,4 +58,9 @@ internal static class BindTypeNames
     public const string Fixed = "FIXED";
     public const string Real = "REAL";
     public const string Boolean = "BOOLEAN";
+    public const string Date = "DATE";
+    public const string Time = "TIME";
+    public const string TimestampNtz = "TIMESTAMP_NTZ";
+    public const string TimestampLtz = "TIMESTAMP_LTZ";
+    public const string Binary = "BINARY";
 }

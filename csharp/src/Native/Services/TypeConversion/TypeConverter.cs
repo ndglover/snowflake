@@ -63,7 +63,7 @@ internal class TypeConverter : ITypeConverter
 
             SnowflakeTypeCode.Date => Date32Type.Default,
 
-            SnowflakeTypeCode.Time => Time64Type.Nanosecond,
+            SnowflakeTypeCode.Time => TimeType.Nanosecond,
 
             SnowflakeTypeCode.Timestamp or
             SnowflakeTypeCode.TimestampNtz => new TimestampType(TimeUnit.Nanosecond, timezone: (string?)null),
@@ -190,21 +190,20 @@ internal class TypeConverter : ITypeConverter
     /// <inheritdoc/>
     public ParameterSet ConvertArrowBatchToParameters(RecordBatch batch)
     {
-        if (batch == null)
-            throw new ArgumentNullException(nameof(batch));
+        ArgumentNullException.ThrowIfNull(batch);
 
         var parameters = new Dictionary<string, SnowflakeBinding>();
 
-        if (batch.Length > 0)
+        if (batch.Length <= 0) 
+            return new ParameterSet { Parameters = parameters };
+        
+        for (var i = 0; i < batch.Schema.FieldsList.Count; i++)
         {
-            for (var i = 0; i < batch.Schema.FieldsList.Count; i++)
-            {
-                // Snowflake binds '?' placeholders positionally: each column is the parameter
-                // at its 1-based ordinal, keyed "1", "2", ... (not by column name). The first
-                // row supplies the value.
-                var key = (i + 1).ToString(CultureInfo.InvariantCulture);
-                parameters[key] = ToBinding(batch.Column(i), 0);
-            }
+            // Snowflake binds '?' placeholders positionally: each column is the parameter
+            // at its 1-based ordinal, keyed "1", "2", ... (not by column name). The first
+            // row supplies the value.
+            var key = (i + 1).ToString(CultureInfo.InvariantCulture);
+            parameters[key] = ToBinding(batch.Column(i), 0);
         }
 
         return new ParameterSet { Parameters = parameters };
@@ -215,18 +214,64 @@ internal class TypeConverter : ITypeConverter
     /// </summary>
     private SnowflakeBinding ToBinding(IArrowArray array, int index)
     {
-        object? value = GetValueFromArray(array, index);
-
-        return value switch
+        // Keyed off the Arrow array type (not the CLR value), since a DateTime alone can't tell a
+        // DATE bind from a TIMESTAMP. A null value keeps the column's bind type. The string value
+        // formats match Snowflake's bind protocol: DATE = ms since epoch, TIME = ns of day,
+        // TIMESTAMP = ns since epoch, BINARY = hex.
+        bool isNull = array.IsNull(index);
+        return array switch
         {
-            null => new SnowflakeBinding(BindTypeNames.Text, null),
-            bool b => new SnowflakeBinding(BindTypeNames.Boolean, b ? "true" : "false"),
-            sbyte or short or int or long => new SnowflakeBinding(BindTypeNames.Fixed, Convert.ToString(value, CultureInfo.InvariantCulture)),
-            float or double => new SnowflakeBinding(BindTypeNames.Real, Convert.ToString(value, CultureInfo.InvariantCulture)),
-            string s => new SnowflakeBinding(BindTypeNames.Text, s),
-            _ => new SnowflakeBinding(BindTypeNames.Text, Convert.ToString(value, CultureInfo.InvariantCulture))
+            BooleanArray a => new SnowflakeBinding(BindTypeNames.Boolean, isNull ? null : (a.GetValue(index)!.Value ? "true" : "false")),
+            Int8Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            Int16Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            Int32Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            Int64Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            UInt8Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            UInt16Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            UInt32Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            UInt64Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            Decimal128Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetValue(index)?.ToString(CultureInfo.InvariantCulture)),
+            Decimal256Array a => new SnowflakeBinding(BindTypeNames.Fixed, isNull ? null : a.GetString(index)),
+            FloatArray a => new SnowflakeBinding(BindTypeNames.Real, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            DoubleArray a => new SnowflakeBinding(BindTypeNames.Real, isNull ? null : a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture)),
+            StringArray a => new SnowflakeBinding(BindTypeNames.Text, isNull ? null : a.GetString(index)),
+            BinaryArray a => new SnowflakeBinding(BindTypeNames.Binary, isNull ? null : Convert.ToHexString(a.GetBytes(index)).ToLowerInvariant()),
+            Date32Array a => new SnowflakeBinding(BindTypeNames.Date, isNull ? null : DateMillisSinceEpoch(a.GetDateTime(index)!.Value).ToString(CultureInfo.InvariantCulture)),
+            Date64Array a => new SnowflakeBinding(BindTypeNames.Date, isNull ? null : DateMillisSinceEpoch(a.GetDateTime(index)!.Value).ToString(CultureInfo.InvariantCulture)),
+            Time32Array a => new SnowflakeBinding(BindTypeNames.Time, isNull ? null : NanosecondsOfDay(a.Values[index], ((Time32Type)a.Data.DataType).Unit).ToString(CultureInfo.InvariantCulture)),
+            Time64Array a => new SnowflakeBinding(BindTypeNames.Time, isNull ? null : NanosecondsOfDay(a.Values[index], ((Time64Type)a.Data.DataType).Unit).ToString(CultureInfo.InvariantCulture)),
+            TimestampArray a => ToTimestampBinding(a, index, isNull),
+            _ => throw new NotSupportedException($"Binding an Arrow {array.GetType().Name} parameter is not supported.")
         };
     }
+
+    private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static SnowflakeBinding ToTimestampBinding(TimestampArray array, int index, bool isNull)
+    {
+        var type = (TimestampType)array.Data.DataType;
+        // No zone → wall-clock NTZ; a zone means the stored value is the UTC instant → bind as LTZ
+        // (Arrow can't carry a per-row offset, so TZ would lose nothing meaningful over LTZ here).
+        string bindType = type.Timezone == null ? BindTypeNames.TimestampNtz : BindTypeNames.TimestampLtz;
+        if (isNull)
+            return new SnowflakeBinding(bindType, null);
+
+        long nanos = array.Values[index] * NanosecondsPerUnit(type.Unit);
+        return new SnowflakeBinding(bindType, nanos.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static long DateMillisSinceEpoch(DateTime date) =>
+        (long)(date.Date - UnixEpoch).TotalMilliseconds;
+
+    private static long NanosecondsOfDay(long rawValue, TimeUnit unit) => rawValue * NanosecondsPerUnit(unit);
+
+    private static long NanosecondsPerUnit(TimeUnit unit) => unit switch
+    {
+        TimeUnit.Second => 1_000_000_000L,
+        TimeUnit.Millisecond => 1_000_000L,
+        TimeUnit.Microsecond => 1_000L,
+        _ => 1L // Nanosecond
+    };
 
     private IArrowArray BuildArrowArray(SnowflakeDataType dataType, object?[] values)
     {
@@ -439,25 +484,5 @@ internal class TypeConverter : ITypeConverter
                 builder.Append(Convert.ToDateTime(value));
         }
         return builder.Build();
-    }
-
-    private object? GetValueFromArray(IArrowArray array, int index)
-    {
-        if (array.IsNull(index))
-            return null;
-
-        return array switch
-        {
-            BooleanArray boolArray => boolArray.GetValue(index),
-            Int32Array int32Array => int32Array.GetValue(index),
-            Int64Array int64Array => int64Array.GetValue(index),
-            FloatArray floatArray => floatArray.GetValue(index),
-            DoubleArray doubleArray => doubleArray.GetValue(index),
-            StringArray stringArray => stringArray.GetString(index),
-            BinaryArray binaryArray => binaryArray.GetBytes(index).ToArray(),
-            Date32Array dateArray => dateArray.GetDateTime(index),
-            TimestampArray timestampArray => timestampArray.GetTimestamp(index),
-            _ => throw new NotSupportedException($"Array type {array.GetType()} is not supported.")
-        };
     }
 }

@@ -28,7 +28,6 @@ using Xunit;
 using Xunit.Abstractions;
 
 using Apache.Arrow;
-using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
@@ -130,53 +129,38 @@ public class StatementTests
         Assert.Equal(1, batch.Length);
     }
 
-    [SkippableFact]
-    public async Task CanBindTextParameter()
+    [SkippableTheory]
+    [MemberData(nameof(BindCases.LiveNames), MemberType = typeof(BindCases))]
+    public Task CanBindParameter(string caseName)
     {
-        // Given a parameterized query and a text bind value in a column deliberately NOT named
-        // "1" (the driver binds by position, not name)
-        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
-        using var database = driver.Open(parameters);
-        using var connection = database.Connect(new Dictionary<string, string>());
-        using var statement = connection.CreateStatement();
-        statement.SqlQuery = "SELECT ? AS V";
-        var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
-        var values = new StringArray.Builder().Append("hello").Build();
-        using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
-
-        // When the parameter is bound and the query executed
-        statement.Bind(batch, schema);
-        var result = await statement.ExecuteQueryAsync();
-        Assert.NotNull(result.Stream);
-        using var stream = result.Stream!;
-        var read = await stream.ReadNextRecordBatchAsync();
-
-        // Then the bound value is echoed back
-        Assert.NotNull(read);
-        Assert.Equal("hello", ((StringArray)read!.Column(0)).GetString(0));
+        // Each bindable Arrow type from the shared BindCases table, bound and compared by the
+        // real server. The row returns only if Snowflake accepted the wire format and the value
+        // matched the predicate, so this confirms the encoding end to end.
+        var bindCase = BindCases.Get(caseName);
+        return AssertBoundValueMatches(bindCase.LivePredicate!, bindCase.BuildArray());
     }
 
-    [SkippableFact]
-    public async Task CanBindNumericParameter()
+    /// <summary>
+    /// Binds one parameter and runs <c>SELECT 'ok' WHERE &lt;predicate&gt;</c>: the row only returns
+    /// if Snowflake accepted the bind wire format and the bound value compared equal. The bind field
+    /// is derived from the array's own type, so a case only has to supply the array and predicate.
+    /// </summary>
+    private async Task AssertBoundValueMatches(string predicate, IArrowArray value)
     {
-        // Given a query whose WHERE compares the bind value as a number, and a numeric bind of 42
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
-        statement.SqlQuery = "SELECT 'ok' AS V WHERE ? = 42";
-        var schema = new Schema(new[] { new Field("n", Int64Type.Default, true) }, null);
-        var values = new Int64Array.Builder().Append(42).Build();
-        using var batch = new RecordBatch(schema, new IArrowArray[] { values }, 1);
+        statement.SqlQuery = $"SELECT 'ok' AS V WHERE {predicate}";
+        var schema = new Schema([new Field("p", value.Data.DataType, true)], null);
+        using var batch = new RecordBatch(schema, [value], value.Length);
 
-        // When the parameter is bound and the query executed
         statement.Bind(batch, schema);
         var result = await statement.ExecuteQueryAsync();
         Assert.NotNull(result.Stream);
         using var stream = result.Stream!;
         var read = await stream.ReadNextRecordBatchAsync();
 
-        // Then the row returns, proving the value was bound and compared as the number 42
         Assert.NotNull(read);
         Assert.Equal(1, read!.Length);
         Assert.Equal("ok", ((StringArray)read.Column(0)).GetString(0));

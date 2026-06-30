@@ -242,6 +242,43 @@ public class TypeConverterTests
         Assert.Throws<ArgumentNullException>(() => _converter.ConvertArrowBatchToParameters(null!));
     }
 
+    [Theory]
+    [MemberData(nameof(BindCases.Names), MemberType = typeof(BindCases))]
+    public void ConvertArrowBatchToParameters_FormatsEachTypePerSnowflakeBindProtocol(string caseName)
+    {
+        // One row per bindable Arrow type, defined once in BindCases; this asserts the wire format.
+        var bindCase = BindCases.Get(caseName);
+        AssertBind(bindCase.BuildArray(), bindCase.ExpectedBindType, bindCase.ExpectedValue);
+    }
+
+    [Fact]
+    public void ConvertArrowBatchToParameters_NullValue_KeepsTheColumnBindType()
+    {
+        // A null in a DATE column still binds as a typed DATE null, not an untyped TEXT null.
+        AssertBind(new Date32Array.Builder().AppendNull().Build(), "DATE", null);
+    }
+
+    [Fact]
+    public void ConvertArrowBatchToParameters_UnsupportedArrowType_Throws()
+    {
+        // An untyped null column can't be bound to a Snowflake type — throw rather than guess.
+        var schema = new Schema(new[] { new Field("p", NullType.Default, true) }, null);
+        using var batch = new RecordBatch(schema, new IArrowArray[] { new NullArray(1) }, 1);
+
+        Assert.Throws<NotSupportedException>(() => _converter.ConvertArrowBatchToParameters(batch));
+    }
+
+    private void AssertBind(IArrowArray array, string expectedType, string? expectedValue)
+    {
+        var schema = new Schema(new[] { new Field("p", array.Data.DataType, true) }, null);
+        using var batch = new RecordBatch(schema, new[] { array }, array.Length);
+
+        var binding = _converter.ConvertArrowBatchToParameters(batch).Parameters["1"];
+
+        Assert.Equal(expectedType, binding.Type);
+        Assert.Equal(expectedValue, binding.Value);
+    }
+
     // ---- ConvertSnowflakeResultToArrow ----
 
     [Fact]

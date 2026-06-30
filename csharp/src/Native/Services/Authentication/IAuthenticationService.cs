@@ -53,10 +53,4 @@ internal interface IAuthenticationService
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A refreshed authentication token.</returns>
     Task<AuthenticationToken> RefreshTokenAsync(AuthenticationToken token, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Invalidates an authentication token.
-    /// </summary>
-    /// <param name="token">The token to invalidate.</param>
-    void InvalidateToken(AuthenticationToken token);
 }

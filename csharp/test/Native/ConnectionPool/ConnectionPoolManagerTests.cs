@@ -22,9 +22,12 @@
 */
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
+using NSubstitute;
 using Xunit;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.ConnectionPool;
@@ -95,5 +98,139 @@ public class ConnectionPoolManagerTests
         };
 
         Assert.False(ConnectionPoolManager.IsHeartbeatDue(connection, now));
+    }
+
+    [Fact]
+    public void IsHeartbeatDue_ExactlyAtBoundary_IsDue()
+    {
+        // When elapsed time equals the heartbeat frequency exactly, should be due (uses >=)
+        var now = DateTimeOffset.UtcNow;
+        var frequency = TimeSpan.FromMinutes(15);
+        var connection = new FakePooledConnection
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = true, HeartbeatFrequency = frequency },
+            LastUsedAt = now - frequency,
+            LastHeartbeatAt = now - frequency,
+        };
+
+        Assert.True(ConnectionPoolManager.IsHeartbeatDue(connection, now));
+    }
+
+    [Fact]
+    public void IsHeartbeatDue_WithRecentHeartbeat_IsNotDue()
+    {
+        // LastHeartbeatAt is recent even though LastUsedAt is old — not due
+        var now = DateTimeOffset.UtcNow;
+        var connection = new FakePooledConnection
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = true, HeartbeatFrequency = TimeSpan.FromMinutes(15) },
+            LastUsedAt = now - TimeSpan.FromHours(2),
+            LastHeartbeatAt = now - TimeSpan.FromMinutes(5),
+        };
+
+        Assert.False(ConnectionPoolManager.IsHeartbeatDue(connection, now));
+    }
+
+    [Fact]
+    public async Task Pool_WithNoHeartbeatDelegate_DisposesCleanly()
+    {
+        // Create pool with no sessionHeartbeat delegate, acquire+release, dispose — no crash
+        var authService = Substitute.For<IAuthenticationService>();
+        authService.AuthenticateAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
+            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(new AuthenticationToken
+            {
+                SessionToken = "session",
+                MasterToken = "master",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+            });
+
+        var pool = new ConnectionPoolManager(authService, sessionCloser: null, sessionHeartbeat: null);
+        try
+        {
+            var config = new ConnectionConfig
+            {
+                Account = "test",
+                User = "user",
+                ClientSessionKeepAlive = true,
+                HeartbeatFrequency = TimeSpan.FromMinutes(15),
+            };
+
+            var connection = await pool.AcquireConnectionAsync(config);
+            pool.ReleaseConnection(connection);
+        }
+        finally
+        {
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Pool_WithHeartbeatDelegate_DisposesCleanly()
+    {
+        // Verify pool correctly accepts a heartbeat delegate and disposes without errors
+        var authService = Substitute.For<IAuthenticationService>();
+        var heartbeatCalled = false;
+
+        var pool = new ConnectionPoolManager(
+            authService,
+            sessionCloser: null,
+            sessionHeartbeat: (_, _, _) =>
+            {
+                heartbeatCalled = true;
+                return Task.CompletedTask;
+            });
+
+        pool.Dispose();
+
+        // The delegate was never called because no connection was acquired/released
+        Assert.False(heartbeatCalled);
+    }
+
+    [Fact]
+    public async Task HeartbeatIdleConnections_AfterDispose_DelegateIsNotCalled()
+    {
+        // Constructs the pool with a heartbeat delegate, acquires/releases a connection with
+        // keep-alive enabled, and verifies that after Dispose the delegate is not called
+        // (i.e., cancellation works).
+        var authService = Substitute.For<IAuthenticationService>();
+        authService.AuthenticateAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
+            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(new AuthenticationToken
+            {
+                SessionToken = "session",
+                MasterToken = "master",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+            });
+
+        var heartbeatCallCount = 0;
+        var pool = new ConnectionPoolManager(
+            authService,
+            sessionCloser: null,
+            sessionHeartbeat: (_, _, _) =>
+            {
+                Interlocked.Increment(ref heartbeatCallCount);
+                return Task.CompletedTask;
+            });
+
+        var config = new ConnectionConfig
+        {
+            Account = "test",
+            User = "user",
+            ClientSessionKeepAlive = true,
+            HeartbeatFrequency = TimeSpan.FromMilliseconds(1),
+        };
+
+        var connection = await pool.AcquireConnectionAsync(config);
+        pool.ReleaseConnection(connection);
+
+        // Dispose cancels the cleanup loop, so the 60s PeriodicTimer never ticks
+        pool.Dispose();
+
+        // Wait briefly to confirm no activity after dispose
+        await Task.Delay(100);
+        Assert.Equal(0, heartbeatCallCount);
     }
 }

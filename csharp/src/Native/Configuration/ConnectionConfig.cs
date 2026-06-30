@@ -91,4 +91,18 @@ internal class ConnectionConfig
     /// Gets or sets the network transport configuration (host, proxy).
     /// </summary>
     public NetworkConfig Network { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets whether the driver keeps idle pooled sessions alive with a periodic heartbeat
+    /// (Snowflake's <c>CLIENT_SESSION_KEEP_ALIVE</c>). Off by default; when on, an idle connection is
+    /// pinged every <see cref="HeartbeatFrequency"/> so it does not lapse to master-token expiry.
+    /// </summary>
+    public bool ClientSessionKeepAlive { get; set; }
+
+    /// <summary>
+    /// Gets or sets how often an idle session is heartbeated when <see cref="ClientSessionKeepAlive"/>
+    /// is enabled. Defaults to one hour (well under the ~4h master-token window); the parser clamps it
+    /// to [15 minutes, 1 hour].
+    /// </summary>
+    public TimeSpan HeartbeatFrequency { get; set; } = TimeSpan.FromHours(1);
 }

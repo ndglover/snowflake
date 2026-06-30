@@ -118,6 +118,47 @@ public class ConnectionStringParserTests
     }
 
     [Fact]
+    public void Parse_WithoutKeepAlive_DefaultsToOffAndOneHour()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.False(config.ClientSessionKeepAlive);
+        Assert.Equal(TimeSpan.FromHours(1), config.HeartbeatFrequency);
+    }
+
+    [Fact]
+    public void Parse_WithKeepAliveEnabled_SetsFlagAndFrequency()
+    {
+        // Given keep-alive on with a 1800s (30m) heartbeat frequency inside the allowed band
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.snowflake.sql.client_option.keep_session_alive=true;" +
+            "adbc.snowflake.sql.client_option.keep_session_alive_heartbeat_frequency=1800");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.True(config.ClientSessionKeepAlive);
+        Assert.Equal(TimeSpan.FromMinutes(30), config.HeartbeatFrequency);
+    }
+
+    [Fact]
+    public void Parse_WithOutOfRangeHeartbeatFrequency_ClampsToBand()
+    {
+        // Given a frequency far below the 15-minute floor, it clamps up rather than letting the
+        // session be hammered (or, at the other extreme, lapse).
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.snowflake.sql.client_option.keep_session_alive=true;" +
+            "adbc.snowflake.sql.client_option.keep_session_alive_heartbeat_frequency=5");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(TimeSpan.FromMinutes(15), config.HeartbeatFrequency);
+    }
+
+    [Fact]
     public void Parse_WithPoolConfiguration_ShouldReturnValidConfig()
     {
         // Arrange

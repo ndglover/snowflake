@@ -68,6 +68,16 @@ internal interface IPooledConnection : IDisposable
     internal void UpdateLastUsedAt();
 
     /// <summary>
+    /// Gets the time of the last successful keep-alive heartbeat (or creation, if none yet).
+    /// </summary>
+    DateTimeOffset LastHeartbeatAt { get; }
+
+    /// <summary>
+    /// Records that a keep-alive heartbeat just succeeded (internal use only).
+    /// </summary>
+    internal void RecordHeartbeat();
+
+    /// <summary>
     /// Gets a value indicating whether the connection is disposed.
     /// </summary>
     bool IsDisposed { get; }

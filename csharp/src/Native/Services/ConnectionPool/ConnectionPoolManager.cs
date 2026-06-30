@@ -42,6 +42,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 {
     private readonly IAuthenticationService _authService;
     private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionCloser;
+    private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionHeartbeat;
     private readonly ConcurrentDictionary<string, ConnectionPoolEntry> _pools;
     private readonly CancellationTokenSource _cts = new();
     private readonly object _cleanupStartLock = new();
@@ -59,12 +60,19 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
     /// Optional best-effort callback to close a connection's server-side session when the pool
     /// discards it (so sessions aren't orphaned until they time out).
     /// </param>
+    /// <param name="sessionHeartbeat">
+    /// Optional callback that pings a connection's session keep-alive endpoint. When supplied, the
+    /// background loop heartbeats idle connections whose config has <c>ClientSessionKeepAlive</c> set
+    /// and that are due, so long-idle pooled sessions don't lapse to master-token expiry.
+    /// </param>
     public ConnectionPoolManager(
         IAuthenticationService authService,
-        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionCloser = null)
+        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionCloser = null,
+        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionHeartbeat = null)
     {
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
         _sessionCloser = sessionCloser;
+        _sessionHeartbeat = sessionHeartbeat;
         _pools = new ConcurrentDictionary<string, ConnectionPoolEntry>();
     }
 
@@ -225,6 +233,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
                 try
                 {
                     Cleanup();
+                    await HeartbeatIdleConnectionsAsync(token).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -274,6 +283,65 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
                 connection.Dispose();
                 poolEntry.CapacitySemaphore.Release();
                 Interlocked.Increment(ref _totalConnectionsClosed);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when a connection has keep-alive enabled and has had no query or heartbeat for at least
+    /// its configured heartbeat frequency.
+    /// </summary>
+    internal static bool IsHeartbeatDue(IPooledConnection connection, DateTimeOffset now)
+    {
+        if (!connection.Config.ClientSessionKeepAlive)
+            return false;
+
+        var lastActivity = connection.LastUsedAt > connection.LastHeartbeatAt
+            ? connection.LastUsedAt
+            : connection.LastHeartbeatAt;
+        return now - lastActivity >= connection.Config.HeartbeatFrequency;
+    }
+
+    /// <summary>
+    /// Pings the keep-alive endpoint for every idle connection that is due (see
+    /// <see cref="IsHeartbeatDue"/>). Idle-only by design: idle connections have no in-flight query,
+    /// so a heartbeat can't race the reactive token renewal a running query may trigger. Best-effort —
+    /// a failed heartbeat just leaves the next query to renew reactively.
+    /// </summary>
+    private async Task HeartbeatIdleConnectionsAsync(CancellationToken token)
+    {
+        if (_sessionHeartbeat == null)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        List<IPooledConnection>? due = null;
+        foreach (var poolEntry in _pools.Values)
+        {
+            // ConcurrentStack.ToArray is a lock-free snapshot; a connection acquired between here and
+            // the heartbeat will have a fresh LastUsedAt and so won't be due on the next pass.
+            foreach (var connection in poolEntry.IdleConnections.ToArray())
+            {
+                if (!connection.IsDisposed && IsHeartbeatDue(connection, now))
+                    (due ??= new List<IPooledConnection>()).Add(connection);
+            }
+        }
+
+        if (due == null)
+            return;
+
+        foreach (var connection in due)
+        {
+            if (token.IsCancellationRequested)
+                return;
+
+            try
+            {
+                await _sessionHeartbeat(connection.AuthToken, connection.Config, token).ConfigureAwait(false);
+                connection.RecordHeartbeat();
+            }
+            catch
+            {
+                // Best-effort keep-alive; a transient failure is recovered by reactive renewal later.
             }
         }
     }

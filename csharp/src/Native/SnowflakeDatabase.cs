@@ -25,10 +25,15 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
+using System.Threading;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
+using AdbcDrivers.Snowflake.Native.Services.Query;
+using AdbcDrivers.Snowflake.Native.Services.Transport;
+using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -69,7 +74,25 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, ssoAuth);
         _connectionPool = new ConnectionPoolManager(
             authService,
-            loginClient.CloseSessionAsync);
+            loginClient.CloseSessionAsync,
+            HeartbeatSessionAsync);
+    }
+
+    /// <summary>
+    /// Pings the session keep-alive endpoint for a pooled connection. Builds a transient
+    /// <see cref="QueryExecutor"/> over the shared <see cref="HttpClient"/> (the same way a
+    /// connection does) so the pool can heartbeat without holding a per-connection executor.
+    /// </summary>
+    private Task HeartbeatSessionAsync(AuthenticationToken token, ConnectionConfig config, CancellationToken cancellationToken)
+    {
+        var apiClient = new RestApiClient(_httpClient, config.EnableCompression);
+        var executor = new QueryExecutor(
+            apiClient,
+            new TypeConverter(),
+            config.Account,
+            config.Network,
+            _loggerFactory?.CreateLogger<QueryExecutor>() ?? NullLogger<QueryExecutor>.Instance);
+        return executor.HeartbeatAsync(token, cancellationToken);
     }
 
     private static NetworkConfig ParseNetworkFromParameters(IReadOnlyDictionary<string, string>? parameters)

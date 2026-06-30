@@ -38,6 +38,7 @@ namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 internal class PooledConnection : IPooledConnection
 {
     private DateTimeOffset _lastUsedAt;
+    private DateTimeOffset _lastHeartbeatAt;
     private bool _disposed;
     private readonly Func<Task>? _sessionCloser;
 
@@ -62,6 +63,7 @@ internal class PooledConnection : IPooledConnection
         Config = config ?? throw new ArgumentNullException(nameof(config));
         CreatedAt = DateTimeOffset.UtcNow;
         _lastUsedAt = CreatedAt;
+        _lastHeartbeatAt = CreatedAt;
         _sessionCloser = sessionCloser;
     }
 
@@ -75,6 +77,8 @@ internal class PooledConnection : IPooledConnection
 
     public DateTimeOffset LastUsedAt => _lastUsedAt;
 
+    public DateTimeOffset LastHeartbeatAt => _lastHeartbeatAt;
+
     public bool IsDisposed => _disposed;
 
     public bool IsTokenExpired => AuthToken.IsExpired;
@@ -87,6 +91,11 @@ internal class PooledConnection : IPooledConnection
     /// Updates the last used timestamp (internal use only).
     /// </summary>
     void IPooledConnection.UpdateLastUsedAt() => _lastUsedAt = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Records that a keep-alive heartbeat just succeeded (internal use only).
+    /// </summary>
+    void IPooledConnection.RecordHeartbeat() => _lastHeartbeatAt = DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Disposes the connection.

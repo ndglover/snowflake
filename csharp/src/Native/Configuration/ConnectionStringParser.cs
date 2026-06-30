@@ -36,6 +36,12 @@ namespace AdbcDrivers.Snowflake.Native.Configuration;
 /// </summary>
 internal static class ConnectionStringParser
 {
+    /// <summary>Lower bound for the keep-alive heartbeat frequency.</summary>
+    private static readonly TimeSpan MinHeartbeatFrequency = TimeSpan.FromMinutes(15);
+
+    /// <summary>Upper bound for the keep-alive heartbeat frequency.</summary>
+    private static readonly TimeSpan MaxHeartbeatFrequency = TimeSpan.FromHours(1);
+
     /// <summary>
     /// Parses ADBC parameters with connection-specific overrides into a ConnectionConfig object.
     /// Connection parameters take precedence over database defaults.
@@ -102,6 +108,21 @@ internal static class ConnectionStringParser
             bool.TryParse(compressionStr, out bool enableCompression))
         {
             config.EnableCompression = enableCompression;
+        }
+
+        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.keep_session_alive", out string? keepAliveStr) &&
+            bool.TryParse(keepAliveStr, out bool keepAlive))
+        {
+            config.ClientSessionKeepAlive = keepAlive;
+        }
+
+        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.keep_session_alive_heartbeat_frequency", out string? freqStr) &&
+            int.TryParse(freqStr, out int freqSeconds))
+        {
+            // Clamp to a safe band: frequent enough to stay under the ~4h master window, but not
+            // so frequent it hammers the server. Mirrors gosnowflake's heartbeat-frequency bounds.
+            var clamped = Math.Clamp(freqSeconds, (int)MinHeartbeatFrequency.TotalSeconds, (int)MaxHeartbeatFrequency.TotalSeconds);
+            config.HeartbeatFrequency = TimeSpan.FromSeconds(clamped);
         }
 
         config.PoolConfig = ParseConnectionPoolConfig(parameters);

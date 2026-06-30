@@ -108,10 +108,10 @@ public class RequestBuilderTests
     }
 
     [Fact]
-    public void BuildCancelRequest_SetsQueryId()
+    public void BuildCancelRequest_SetsRequestId()
     {
-        SnowflakeCancelRequestBody request = RequestBuilder.BuildCancelRequest("query-123");
-        Assert.Equal("query-123", request.QueryId);
+        SnowflakeCancelRequestBody request = RequestBuilder.BuildCancelRequest("request-123");
+        Assert.Equal("request-123", request.RequestId);
     }
 
     [Fact]

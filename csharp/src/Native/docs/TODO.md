@@ -6,7 +6,6 @@ Last reconciled 2026-06-29.
 ## Tier 1 — Blockers (correctness / leaks / missing core)
 
 - [ ] **Master-token expiry recovery** — Reactive renewal works (verified live), but once the master expires (idle > ~4h) the renewal POST returns **`390114`** and the query fails (confirmed live, 8h harness run). **Reference-aligned fix (NOT re-login):** both gosnowflake and connector-net just propagate the renewal error on master expiry — neither auto-re-logins. The reference recovery is (a) **auto-heartbeat** gated on `CLIENT_SESSION_KEEP_ALIVE` to *prevent* reaching expiry (background timer, renew-on-390112, endpoint already built), and (b) surface `390114` as an identifiable error so the app/pool reconnects (the pool should already evict the connection on release via `IsTokenExpired`). Also adopt gosnowflake's renewal **lock** + "renew only if the token is still the expired one" to dedupe concurrent renewals (covers the unsynchronized-token-mutation item below).
-- [ ] **Query cancellation — `NotImplementedException`** (`QueryExecutor.CancelQueryAsync`) — no way to abort a runaway query server-side.
 
 ## Tier 2 — Important (robustness / correctness)
 
@@ -29,6 +28,7 @@ Last reconciled 2026-06-29.
 
 ## Resolved
 
+- [x] **Query cancellation** — `QueryExecutor.CancelQueryAsync` now aborts via `POST /queries/v1/abort-request`, keyed on the original **requestId** (not queryId) and authenticated with the session token — matching gosnowflake/connector-net. `QueryRequest.RequestId` lets a statement submit with a known id; `SnowflakeStatement.Cancel()` (overriding `AdbcStatement.Cancel`) aborts the in-flight request from another thread. Verified live: `StatementTests.CanCancelRunningQuery` cancels a `SYSTEM$WAIT` query and gets back a Snowflake cancellation error.
 - [x] **Bind-parameter type coverage** — `ToBinding` is keyed off the Arrow array type with correct Snowflake bind formats: DATE = ms since epoch, TIME = ns of day, TIMESTAMP_NTZ/LTZ = ns since epoch, BINARY = lower hex, DECIMAL → FIXED string. It now covers the same scalar set as `ConvertArrowTypeToSnowflake` (describe): Bool, Int8/16/32/64, UInt8/16/32/64, Float, Double, Decimal128/256, String, Binary, Date32/64, Time32/64, Timestamp NTZ/LTZ. Typed nulls keep their column bind type; unmapped types (List/Struct, etc.) throw `NotSupportedException`. Bind cases live in one table (`test/Native/BindCases.cs`) consumed by both the offline format theory (`TypeConverterTests`) and the live round-trip theory (`StatementTests.CanBindParameter`). Known limitation: only row 0 of a bound batch is used — no array/`executemany` binding yet.
 - [x] **SnowflakeDatabase disposes its HttpClient** — tracks `_ownsHttpClient` (true only when it created the client, not when injected) and disposes it in `Dispose()` — after the pool, so in-flight session-closes still have a live client.
 - [x] **Renewal not synchronized** — renewal now runs under a per-connection `SemaphoreSlim` and skips if the session token already changed (gosnowflake's "renew only if still the expired token" guard), so concurrent statements don't double-renew.

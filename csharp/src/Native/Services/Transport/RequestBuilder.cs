@@ -94,14 +94,13 @@ internal static class RequestBuilder
     /// <summary>
     /// Builds a query cancellation request.
     /// </summary>
-    /// <param name="queryId">The query ID to cancel.</param>
+    /// <param name="requestId">The request id the query was submitted with.</param>
     /// <returns>A query cancellation request body.</returns>
-    public static SnowflakeCancelRequestBody BuildCancelRequest(string queryId)
+    public static SnowflakeCancelRequestBody BuildCancelRequest(string requestId)
     {
-        if (string.IsNullOrEmpty(queryId))
-            throw new ArgumentException("Query ID cannot be null or empty.", nameof(queryId));
-
-        return new SnowflakeCancelRequestBody { QueryId = queryId };
+        return string.IsNullOrEmpty(requestId)
+            ? throw new ArgumentException("Request id cannot be null or empty.", nameof(requestId))
+            : new SnowflakeCancelRequestBody { RequestId = requestId };
     }
 
     /// <summary>

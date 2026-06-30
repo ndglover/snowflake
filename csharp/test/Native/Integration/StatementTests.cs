@@ -28,6 +28,7 @@ using Xunit;
 using Xunit.Abstractions;
 
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Tests.Integration;
 
@@ -164,6 +165,27 @@ public class StatementTests
         Assert.NotNull(read);
         Assert.Equal(1, read!.Length);
         Assert.Equal("ok", ((StringArray)read.Column(0)).GetString(0));
+    }
+
+    [SkippableFact]
+    public async Task CanCancelRunningQuery()
+    {
+        // Given a query that runs long enough to be cancelled mid-flight
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        statement.SqlQuery = "SELECT SYSTEM$WAIT(10)";
+
+        // When it is started on a background thread and cancelled after it has begun running
+        var queryTask = Task.Run(statement.ExecuteQuery);
+        await Task.Delay(1000);
+        statement.Cancel();
+
+        // Then the running query terminates with a Snowflake cancellation error instead of completing
+        var ex = await Assert.ThrowsAsync<AdbcException>(async () => await queryTask);
+        _output.WriteLine($"Cancelled query failed with: {ex.Message}");
+        Assert.Contains("cancel", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [SkippableFact]

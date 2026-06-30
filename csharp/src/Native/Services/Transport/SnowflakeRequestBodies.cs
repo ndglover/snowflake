@@ -60,12 +60,13 @@ internal sealed record SnowflakeBinding(
     [property: JsonPropertyName("value")] object? Value);
 
 /// <summary>
-/// Request body for cancelling a running query.
+/// Request body for cancelling a running query. Snowflake aborts by the <c>requestId</c> the
+/// query was submitted with (not the queryId it returns), so the original request id is echoed here.
 /// </summary>
 internal sealed class SnowflakeCancelRequestBody
 {
-    [JsonPropertyName("queryId")]
-    public required string QueryId { get; init; }
+    [JsonPropertyName("requestId")]
+    public required string RequestId { get; init; }
 }
 
 /// <summary>

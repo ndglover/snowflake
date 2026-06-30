@@ -49,6 +49,7 @@ internal class QueryExecutor : IQueryExecutor
     // Serializes session renewal on this connection so concurrent statements don't double-renew.
     private readonly SemaphoreSlim _renewLock = new(1, 1);
     private const string QueryEndpoint = "/queries/v1/query-request";
+    private const string AbortEndpoint = "/queries/v1/abort-request";
     private const string TokenRequestEndpoint = "/session/token-request";
     private const string HeartbeatEndpoint = "/session/heartbeat";
 
@@ -322,7 +323,9 @@ internal class QueryExecutor : IQueryExecutor
             request.IsMultiStatement,
             describeOnly);
 
-        var requestId = Guid.NewGuid().ToString();
+        // A caller-supplied request id lets the statement abort this exact request later; the
+        // request_guid is per-attempt and is regenerated on the renewal retry.
+        var requestId = string.IsNullOrEmpty(request.RequestId) ? Guid.NewGuid().ToString() : request.RequestId;
         var requestGuid = Guid.NewGuid().ToString();
         var startTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         endpoint = $"{_accountUrl}{QueryEndpoint}?requestId={requestId}&request_guid={requestGuid}&startTime={startTime}";
@@ -467,11 +470,25 @@ internal class QueryExecutor : IQueryExecutor
     }
 
     /// <inheritdoc/>
-    public Task CancelQueryAsync(string queryId, CancellationToken cancellationToken = default)
+    public async Task CancelQueryAsync(string requestId, AuthenticationToken authToken, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(queryId);
+        ArgumentException.ThrowIfNullOrEmpty(requestId);
+        ArgumentNullException.ThrowIfNull(authToken);
 
-        throw new NotImplementedException("Query cancellation not yet implemented");
+        // The abort request carries its own fresh requestId/guid; the running query is identified
+        // by the requestId echoed in the body.
+        var abortRequestId = Guid.NewGuid().ToString();
+        var requestGuid = Guid.NewGuid().ToString();
+        var endpoint = $"{_accountUrl}{AbortEndpoint}?requestId={abortRequestId}&request_guid={requestGuid}";
+
+        var body = RequestBuilder.BuildCancelRequest(requestId);
+        var response = await _apiClient.PostAsync<SnowflakeCancelRequestBody, SnowflakeQueryResponse>(
+            endpoint, body, authToken, cancellationToken).ConfigureAwait(false);
+
+        // A successful abort returns success; if the query already finished there is simply nothing
+        // to cancel. Surface other failures so a genuinely broken abort isn't silently swallowed.
+        if (!response.Success)
+            throw new AdbcException($"Failed to cancel the Snowflake query (code {response.Code ?? "unknown"}).");
     }
 
 }

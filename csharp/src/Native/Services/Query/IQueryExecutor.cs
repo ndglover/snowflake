@@ -86,12 +86,16 @@ internal interface IQueryExecutor
     Task<QueryResult> ExecutePreparedStatementAsync(PreparedStatement statement, ParameterSet parameters, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Cancels a running query.
+    /// Cancels a running query by aborting the request it was submitted with
+    /// (<c>POST /queries/v1/abort-request</c>). Snowflake keys the abort on the original
+    /// <paramref name="requestId"/>, not the queryId it returns, so the caller must hold the id it
+    /// submitted the query with. The abort is authenticated with the session token.
     /// </summary>
-    /// <param name="queryId">The query ID to cancel.</param>
+    /// <param name="requestId">The request id the running query was submitted with.</param>
+    /// <param name="authToken">The session's authentication token, used to authenticate the abort.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task representing the cancellation operation.</returns>
-    Task CancelQueryAsync(string queryId, CancellationToken cancellationToken = default);
+    Task CancelQueryAsync(string requestId, AuthenticationToken authToken, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -143,6 +147,13 @@ internal class QueryRequest
     /// Gets or sets a value indicating whether this is a multi-statement query.
     /// </summary>
     public bool IsMultiStatement { get; set; }
+
+    /// <summary>
+    /// Gets or sets the request id to submit the query with. When set, the same id can later be
+    /// passed to <see cref="IQueryExecutor.CancelQueryAsync"/> to abort this specific request.
+    /// When null, the executor generates one per attempt.
+    /// </summary>
+    public string? RequestId { get; set; }
 
     /// <summary>
     /// Gets or sets the authentication token for the request.

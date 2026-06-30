@@ -46,6 +46,9 @@ public sealed class SnowflakeStatement : AdbcStatement
     private readonly IQueryExecutor _queryExecutor;
     private readonly ITypeConverter _typeConverter;
     private RecordBatch? _boundParameters;
+    // The request id of the in-flight query, set before each execution so Cancel (called from
+    // another thread) can abort that specific request. Volatile for cross-thread visibility.
+    private volatile string? _currentRequestId;
     private bool _disposed;
 
     /// <summary>
@@ -112,6 +115,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 Warehouse = _config.Warehouse,
                 Role = _config.Role,
                 Timeout = _config.QueryTimeout,
+                RequestId = NewRequestId(),
                 AuthToken = _pooledConnection.AuthToken
             };
 
@@ -187,6 +191,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 Warehouse = _config.Warehouse,
                 Role = _config.Role,
                 Timeout = _config.QueryTimeout,
+                RequestId = NewRequestId(),
                 AuthToken = _pooledConnection.AuthToken
             };
 
@@ -223,6 +228,37 @@ public sealed class SnowflakeStatement : AdbcStatement
         {
             throw new AdbcException($"Update execution failed: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Cancels the query currently executing on this statement, if any. Safe to call from a
+    /// different thread than the one running the query (the typical use). No-ops when nothing is
+    /// executing. The server-side abort is best-effort: a query that has already finished is not
+    /// an error.
+    /// </summary>
+    public override void Cancel() => CancelAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Asynchronous form of <see cref="Cancel"/>.
+    /// </summary>
+    public async Task CancelAsync()
+    {
+        ThrowIfDisposed();
+
+        var requestId = _currentRequestId;
+        if (string.IsNullOrEmpty(requestId))
+            return;
+
+        await _queryExecutor.CancelQueryAsync(requestId, _pooledConnection.AuthToken).ConfigureAwait(false);
+    }
+
+    // Generates and records the request id for the execution that is about to start, so a
+    // concurrent Cancel can abort exactly this request.
+    private string NewRequestId()
+    {
+        var requestId = Guid.NewGuid().ToString();
+        _currentRequestId = requestId;
+        return requestId;
     }
 
     /// <summary>

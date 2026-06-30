@@ -43,6 +43,7 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     private readonly IReadOnlyDictionary<string, string>? _parameters;
     private readonly IConnectionPoolManager _connectionPool;
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly ILoggerFactory? _loggerFactory;
     private bool _disposed;
 
@@ -57,6 +58,7 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         _parameters = parameters;
         _loggerFactory = loggerFactory;
         _httpClient = httpClient ?? CreateHttpClient(ParseNetworkFromParameters(parameters));
+        _ownsHttpClient = httpClient == null;
 
         var loginClient = new SnowflakeLoginClient(_httpClient);
         var basicAuth = new BasicAuthenticator(loginClient);
@@ -147,6 +149,8 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         if (!_disposed)
         {
             _connectionPool?.Dispose();
+            if (_ownsHttpClient)
+                _httpClient?.Dispose();
             _disposed = true;
         }
         base.Dispose();

@@ -5,7 +5,6 @@ Last reconciled 2026-06-29.
 
 ## Tier 1 — Blockers (correctness / leaks / missing core)
 
-- [ ] **PooledConnection doesn't close the Snowflake session** — `Dispose()` sends no `DELETE /session`, so every discarded connection leaks a live server-side session until it times out (~4h). Under connection churn this hits account session limits. Close on the pool's discard path (`PooledConnection.Dispose`). *(in progress)*
 - [ ] **Master-token expiry recovery** — Reactive renewal works (verified live), but once the master expires (idle > ~4h) the renewal POST returns **`390114`** and the query fails (confirmed live, 8h harness run). **Reference-aligned fix (NOT re-login):** both gosnowflake and connector-net just propagate the renewal error on master expiry — neither auto-re-logins. The reference recovery is (a) **auto-heartbeat** gated on `CLIENT_SESSION_KEEP_ALIVE` to *prevent* reaching expiry (background timer, renew-on-390112, endpoint already built), and (b) surface `390114` as an identifiable error so the app/pool reconnects (the pool should already evict the connection on release via `IsTokenExpired`). Also adopt gosnowflake's renewal **lock** + "renew only if the token is still the expired one" to dedupe concurrent renewals (covers the unsynchronized-token-mutation item below).
 - [ ] **Query cancellation — `NotImplementedException`** (`QueryExecutor.CancelQueryAsync`) — no way to abort a runaway query server-side.
 
@@ -13,7 +12,6 @@ Last reconciled 2026-06-29.
 
 - [ ] **Transactions — `NotImplementedException`** (`SnowflakeConnection.Commit`/`Rollback`) — autocommit only. Blocker *if* consumers need explicit transactions (scope decision).
 - [ ] **Bind-parameter type coverage** — `TypeConverter.ToBinding` maps only TEXT/FIXED/REAL/BOOLEAN; DATE/TIME/TIMESTAMP/DECIMAL/BINARY fall through to `Convert.ToString` as TEXT (silently wrong — a `byte[]` binds as `"System.Byte[]"`). Implement them or throw `NotSupportedException` instead of binding garbage.
-- [ ] **SnowflakeDatabase doesn't dispose its HttpClient** — when it creates its own (not injected), track ownership and dispose it in `Dispose()`.
 
 ## Tier 3 — Hygiene / decisions
 
@@ -32,6 +30,7 @@ Last reconciled 2026-06-29.
 
 ## Resolved
 
+- [x] **SnowflakeDatabase disposes its HttpClient** — tracks `_ownsHttpClient` (true only when it created the client, not when injected) and disposes it in `Dispose()` — after the pool, so in-flight session-closes still have a live client.
 - [x] **Renewal not synchronized** — renewal now runs under a per-connection `SemaphoreSlim` and skips if the session token already changed (gosnowflake's "renew only if still the expired token" guard), so concurrent statements don't double-renew.
 - [x] **Orphaned server sessions** — `PooledConnection.Dispose` now best-effort closes the session (`POST /session?delete=true`) via a closer wired from `SnowflakeDatabase` through the pool; fires when the pool discards a connection (incl. pool/database dispose).
 - [x] **SnowflakeStatement double-wraps exceptions** — added `catch (AdbcException) { throw; }` in `ExecuteQueryAsync` (matching `ExecuteUpdateAsync`).

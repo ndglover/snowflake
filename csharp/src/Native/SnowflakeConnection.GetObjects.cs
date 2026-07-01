@@ -125,10 +125,10 @@ public sealed partial class SnowflakeConnection
         }
 
         IArrowArray[] dataArrays =
-        {
+        [
             dbSchemaNameBuilder.Build(),
             dbSchemaTablesValues.BuildListArrayForType(new StructType(StandardSchemas.TableSchema))
-        };
+        ];
 
         return new StructArray(new StructType(StandardSchemas.DbSchemaSchema), length, dataArrays, nullBitmap.Build());
     }
@@ -179,12 +179,12 @@ public sealed partial class SnowflakeConnection
         }
 
         IArrowArray[] dataArrays =
-        {
+        [
             tableNameBuilder.Build(),
             tableTypeBuilder.Build(),
             tableColumnsValues.BuildListArrayForType(new StructType(StandardSchemas.ColumnSchema)),
             tableConstraintsValues.BuildListArrayForType(new StructType(StandardSchemas.ConstraintSchema))
-        };
+        ];
 
         return new StructArray(new StructType(StandardSchemas.TableSchema), length, dataArrays, nullBitmap.Build());
     }
@@ -260,7 +260,7 @@ public sealed partial class SnowflakeConnection
         }
 
         IArrowArray[] dataArrays =
-        {
+        [
             columnNameBuilder.Build(),
             ordinalPositionBuilder.Build(),
             remarksBuilder.Build(),
@@ -280,7 +280,7 @@ public sealed partial class SnowflakeConnection
             xdbcScopeTableBuilder.Build(),
             xdbcIsAutoincrementBuilder.Build(),
             xdbcIsGeneratedColumnBuilder.Build()
-        };
+        ];
 
         return new StructArray(new StructType(StandardSchemas.ColumnSchema), length, dataArrays, nullBitmap.Build());
     }
@@ -319,12 +319,12 @@ public sealed partial class SnowflakeConnection
         }
 
         IArrowArray[] dataArrays =
-        {
+        [
             constraintNameBuilder.Build(),
             constraintTypeBuilder.Build(),
             constraintColumnNamesValues.BuildListArrayForType(StringType.Default),
             constraintColumnUsageValues.BuildListArrayForType(new StructType(StandardSchemas.UsageSchema))
-        };
+        ];
 
         return new StructArray(new StructType(StandardSchemas.ConstraintSchema), length, dataArrays, nullBitmap.Build());
     }

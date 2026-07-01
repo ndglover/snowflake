@@ -24,9 +24,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
 /// <summary>

@@ -21,9 +21,6 @@
 * limitations under the License.
 */
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 /// <summary>
@@ -34,10 +31,10 @@ internal class SnowflakeResultSet
     /// <summary>
     /// Gets or sets the column metadata.
     /// </summary>
-    public SnowflakeColumnMetadata[] Columns { get; set; } = System.Array.Empty<SnowflakeColumnMetadata>();
+    public SnowflakeColumnMetadata[] Columns { get; set; } = [];
 
     /// <summary>
     /// Gets or sets the row data.
     /// </summary>
-    public object?[][] Rows { get; set; } = System.Array.Empty<object?[]>();
+    public object?[][] Rows { get; set; } = [];
 }

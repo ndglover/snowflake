@@ -1,15 +1,16 @@
 # Native C# Snowflake ADBC Driver — TODO
 
 Issues to resolve before considering the driver production-ready. Tiered by impact.
-Last reconciled 2026-06-29.
+Last reconciled 2026-07-01.
 
 ## Tier 1 — Blockers (correctness / leaks / missing core)
 
-- [ ] **Master-token expiry recovery** — Reactive renewal works (verified live), but once the master expires (idle > ~4h) the renewal POST returns **`390114`** and the query fails (confirmed live, 8h harness run). **Reference-aligned fix (NOT re-login):** both gosnowflake and connector-net just propagate the renewal error on master expiry — neither auto-re-logins. The reference recovery is (a) **auto-heartbeat** gated on `CLIENT_SESSION_KEEP_ALIVE` to *prevent* reaching expiry (background timer, renew-on-390112, endpoint already built), and (b) surface `390114` as an identifiable error so the app/pool reconnects (the pool should already evict the connection on release via `IsTokenExpired`). Also adopt gosnowflake's renewal **lock** + "renew only if the token is still the expired one" to dedupe concurrent renewals (covers the unsynchronized-token-mutation item below).
+_None outstanding._
 
 ## Tier 2 — Important (robustness / correctness)
 
 - [ ] **Transactions — `NotImplementedException`** (`SnowflakeConnection.Commit`/`Rollback`) — autocommit only. Blocker *if* consumers need explicit transactions (scope decision).
+- [ ] **Pool waiters aren't woken when a connection is released to idle** — `ReleaseConnection` releases the `CapacitySemaphore` permit only when a connection is *discarded* (invalid/faulted); a healthy connection returned to the idle stack keeps holding its permit. So a caller blocked in `AcquireConnectionAsync`'s `WaitAsync` isn't unblocked by a release-to-idle — it waits out the full `AcquireTimeout` and fails even though an idle connection is available (only a *fresh* acquire reuses it via the fast path). The `AcquireTimeout` backstop stops the old infinite hang, but under contention this wastes the wait. Fix needs a semaphore-accounting rework (permits count active connections only and are released on every return, or signal waiters directly on release).
 
 ## Tier 3 — Hygiene / decisions
 
@@ -19,6 +20,7 @@ Last reconciled 2026-06-29.
 - [ ] **`ssl_skip_verify` footgun** — wires `DangerousAcceptAnyServerCertificateValidator`; make it hard to enable accidentally (warn/log loudly; document test-only).
 - [ ] **SsoAuthenticator hardcodes port 8080** — no fallback if in use; use an OS-assigned port or try several.
 - [ ] **No consumer logging path** — `ILogger` is used internally but there's no easy way for a consumer to plug in logging (hit this with the session harness). Needed for prod diagnostics.
+- [ ] **Pool statistics are computed but never surfaced** — `ConnectionPoolManager.GetStatisticsAsync`/`PoolStatistics` and the counters behind them (`_totalConnectionsCreated/Closed/Reuses`, `PendingRequests`) are maintained everywhere but have no caller (a conventional pool-metrics surface carried over, not wired up). Review alongside the logging/observability work: either expose them (metrics/`ILogger`/an ADBC option) or remove the DTO + counters as dead weight.
 - [ ] **Secret-logging audit** — confirm no token is ever logged at any level.
 - [ ] **GetParameterSchema — `NotImplementedException`** — by design (Snowflake doesn't report bind types); document it rather than leave it looking unfinished.
 
@@ -28,6 +30,7 @@ Last reconciled 2026-06-29.
 
 ## Resolved
 
+- [x] **Master-token expiry recovery (auto-heartbeat)** — opt-in via `CLIENT_SESSION_KEEP_ALIVE` (`adbc.snowflake.sql.client_option.keep_session_alive`, frequency clamped to [15m, 1h], default 1h). The pool's background loop heartbeats due **idle** connections (`POST /session/heartbeat`, renew-on-390112), which re-mints both the session and master tokens and rolls the ~4h master ceiling forward. Idle-only so a heartbeat never races the reactive renewal of an in-flight query. All pool timekeeping (idle/lifetime/expiry/heartbeat) runs on an injectable `TimeProvider`, so the loop is unit-tested with `FakeTimeProvider`. Verified live: 60m heartbeats kept an idle session alive **13h — 3× past the original 4h master window** (harness run, 2026-06-30). Renewal is lock-guarded ("renew only if the token is still the expired one") to dedupe concurrent renewals.
 - [x] **Query cancellation** — `QueryExecutor.CancelQueryAsync` now aborts via `POST /queries/v1/abort-request`, keyed on the original **requestId** (not queryId) and authenticated with the session token — matching gosnowflake/connector-net. `QueryRequest.RequestId` lets a statement submit with a known id; `SnowflakeStatement.Cancel()` (overriding `AdbcStatement.Cancel`) aborts the in-flight request from another thread. Verified live: `StatementTests.CanCancelRunningQuery` cancels a `SYSTEM$WAIT` query and gets back a Snowflake cancellation error.
 - [x] **Bind-parameter type coverage** — `ToBinding` is keyed off the Arrow array type with correct Snowflake bind formats: DATE = ms since epoch, TIME = ns of day, TIMESTAMP_NTZ/LTZ = ns since epoch, BINARY = lower hex, DECIMAL → FIXED string. It now covers the same scalar set as `ConvertArrowTypeToSnowflake` (describe): Bool, Int8/16/32/64, UInt8/16/32/64, Float, Double, Decimal128/256, String, Binary, Date32/64, Time32/64, Timestamp NTZ/LTZ. Typed nulls keep their column bind type; unmapped types (List/Struct, etc.) throw `NotSupportedException`. Bind cases live in one table (`test/Native/BindCases.cs`) consumed by both the offline format theory (`TypeConverterTests`) and the live round-trip theory (`StatementTests.CanBindParameter`). Known limitation: only row 0 of a bound batch is used — no array/`executemany` binding yet.
 - [x] **SnowflakeDatabase disposes its HttpClient** — tracks `_ownsHttpClient` (true only when it created the client, not when injected) and disposes it in `Dispose()` — after the pool, so in-flight session-closes still have a live client.

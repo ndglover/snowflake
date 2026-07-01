@@ -24,9 +24,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
 /// <summary>
@@ -49,4 +46,11 @@ internal class ConnectionPoolConfig
     /// Gets or sets the maximum lifetime of a connection in the pool.
     /// </summary>
     public TimeSpan MaxConnectionLifetime { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Gets or sets how long to wait for an available connection when the pool is at
+    /// <see cref="MaxPoolSize"/> before failing, rather than blocking indefinitely. Defaults to
+    /// 120 seconds (matching the Snowflake .NET connector's <c>waitingForIdleSessionTimeout</c>).
+    /// </summary>
+    public TimeSpan AcquireTimeout { get; set; } = TimeSpan.FromSeconds(120);
 }

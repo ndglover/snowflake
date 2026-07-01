@@ -27,6 +27,8 @@ using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
+using Apache.Arrow.Adbc;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Xunit;
 
@@ -41,18 +43,32 @@ public class ConnectionPoolManagerTests
         public ConnectionConfig Config { get; init; } = new();
         public DateTimeOffset LastUsedAt { get; init; }
         public DateTimeOffset LastHeartbeatAt { get; set; }
+        public int RecordHeartbeatCount { get; private set; }
 
         public string ConnectionId => "fake";
         public AuthenticationToken AuthToken { get; } = new();
         public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
-        public bool IsDisposed => false;
+        public bool IsDisposed { get; init; }
         public bool IsTokenExpired => false;
         public bool IsFaulted => false;
         public void MarkFaulted() { }
         void IPooledConnection.UpdateLastUsedAt() { }
-        void IPooledConnection.RecordHeartbeat() => LastHeartbeatAt = DateTimeOffset.UtcNow;
+        void IPooledConnection.RecordHeartbeat()
+        {
+            RecordHeartbeatCount++;
+            LastHeartbeatAt = DateTimeOffset.UtcNow;
+        }
         public void Dispose() { }
     }
+
+    /// <summary>A keep-alive connection that has been idle long enough to be due at <paramref name="now"/>.</summary>
+    private static FakePooledConnection DueConnection(DateTimeOffset now) =>
+        new()
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = true, HeartbeatFrequency = TimeSpan.FromMinutes(15) },
+            LastUsedAt = now - TimeSpan.FromMinutes(20),
+            LastHeartbeatAt = now - TimeSpan.FromMinutes(20),
+        };
 
     [Fact]
     public void IsHeartbeatDue_WhenKeepAliveDisabled_IsNeverDue()
@@ -167,33 +183,162 @@ public class ConnectionPoolManagerTests
     }
 
     [Fact]
-    public void Pool_WithHeartbeatDelegate_DisposesCleanly()
+    public async Task HeartbeatDueConnections_FiresForDueConnection_AndRecordsHeartbeat()
     {
-        // Verify pool correctly accepts a heartbeat delegate and disposes without errors
-        var authService = Substitute.For<IAuthenticationService>();
-        var heartbeatCalled = false;
+        // Given one due keep-alive connection
+        var now = DateTimeOffset.UtcNow;
+        var connection = DueConnection(now);
+        var calls = 0;
 
-        var pool = new ConnectionPoolManager(
-            authService,
-            sessionCloser: null,
-            sessionHeartbeat: (_, _, _) =>
-            {
-                heartbeatCalled = true;
-                return Task.CompletedTask;
-            });
+        // When the heartbeat pass runs
+        await ConnectionPoolManager.HeartbeatDueConnectionsAsync(
+            new[] { connection },
+            (_, _, _) => { calls++; return Task.CompletedTask; },
+            now,
+            CancellationToken.None);
 
-        pool.Dispose();
-
-        // The delegate was never called because no connection was acquired/released
-        Assert.False(heartbeatCalled);
+        // Then the delegate fired once and the heartbeat was recorded (resetting the due clock)
+        Assert.Equal(1, calls);
+        Assert.Equal(1, connection.RecordHeartbeatCount);
     }
 
     [Fact]
-    public async Task HeartbeatIdleConnections_AfterDispose_DelegateIsNotCalled()
+    public async Task HeartbeatDueConnections_SkipsDisabledNotDueAndDisposed()
     {
-        // Constructs the pool with a heartbeat delegate, acquires/releases a connection with
-        // keep-alive enabled, and verifies that after Dispose the delegate is not called
-        // (i.e., cancellation works).
+        // Given connections that should each be skipped for a different reason
+        var now = DateTimeOffset.UtcNow;
+        var keepAliveOff = new FakePooledConnection
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = false, HeartbeatFrequency = TimeSpan.FromMinutes(15) },
+            LastUsedAt = now - TimeSpan.FromHours(1),
+            LastHeartbeatAt = now - TimeSpan.FromHours(1),
+        };
+        var recentlyUsed = new FakePooledConnection
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = true, HeartbeatFrequency = TimeSpan.FromMinutes(15) },
+            LastUsedAt = now - TimeSpan.FromMinutes(1),
+            LastHeartbeatAt = now - TimeSpan.FromMinutes(1),
+        };
+        var disposed = new FakePooledConnection
+        {
+            Config = new ConnectionConfig { ClientSessionKeepAlive = true, HeartbeatFrequency = TimeSpan.FromMinutes(15) },
+            LastUsedAt = now - TimeSpan.FromHours(1),
+            LastHeartbeatAt = now - TimeSpan.FromHours(1),
+            IsDisposed = true,
+        };
+        var calls = 0;
+
+        // When the heartbeat pass runs
+        await ConnectionPoolManager.HeartbeatDueConnectionsAsync(
+            new[] { keepAliveOff, recentlyUsed, disposed },
+            (_, _, _) => { calls++; return Task.CompletedTask; },
+            now,
+            CancellationToken.None);
+
+        // Then none are heartbeated
+        Assert.Equal(0, calls);
+        Assert.Equal(0, keepAliveOff.RecordHeartbeatCount);
+        Assert.Equal(0, recentlyUsed.RecordHeartbeatCount);
+        Assert.Equal(0, disposed.RecordHeartbeatCount);
+    }
+
+    [Fact]
+    public async Task HeartbeatDueConnections_WhenTokenCancelled_FiresNothing()
+    {
+        // Given a due connection but an already-cancelled token (e.g. the pool is being disposed)
+        var now = DateTimeOffset.UtcNow;
+        var connection = DueConnection(now);
+        var calls = 0;
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // When the heartbeat pass runs under that token
+        await ConnectionPoolManager.HeartbeatDueConnectionsAsync(
+            new[] { connection },
+            (_, _, _) => { calls++; return Task.CompletedTask; },
+            now,
+            cts.Token);
+
+        // Then nothing is heartbeated
+        Assert.Equal(0, calls);
+        Assert.Equal(0, connection.RecordHeartbeatCount);
+    }
+
+    [Fact]
+    public async Task BackgroundLoop_OnTick_HeartbeatsDueIdleConnection()
+    {
+        // Given a pool on a fake clock with a heartbeat delegate and a keep-alive connection. The
+        // token's expiry is evaluated on the same clock, so it stays valid as fake time advances.
+        var fakeTime = new FakeTimeProvider();
+        var authService = Substitute.For<IAuthenticationService>();
+        authService.AuthenticateAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
+            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(new AuthenticationToken
+            {
+                SessionToken = "session",
+                MasterToken = "master",
+                ExpiresAt = fakeTime.GetUtcNow().AddHours(1),
+            });
+
+        var heartbeatFired = new TaskCompletionSource();
+        using var pool = new ConnectionPoolManager(
+            authService,
+            sessionCloser: null,
+            sessionHeartbeat: (_, _, _) => { heartbeatFired.TrySetResult(); return Task.CompletedTask; },
+            timeProvider: fakeTime);
+
+        var config = new ConnectionConfig
+        {
+            Account = "test",
+            User = "user",
+            ClientSessionKeepAlive = true,
+            HeartbeatFrequency = TimeSpan.FromSeconds(30), // due before one 60s loop tick, within the 10m idle timeout
+        };
+
+        // Acquire then release so the connection sits idle in the pool; this also starts the loop.
+        var connection = await pool.AcquireConnectionAsync(config);
+        pool.ReleaseConnection(connection);
+
+        // When the background loop's 60s timer ticks once (the connection is now 60s idle, past 30s)
+        fakeTime.Advance(TimeSpan.FromSeconds(60));
+
+        // Then the loop heartbeats the idle connection (the delegate completes the signal)
+        await heartbeatFired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task HeartbeatDueConnections_WhenOneHeartbeatThrows_ContinuesWithTheRest()
+    {
+        // Given two due connections where the first connection's heartbeat fails
+        var now = DateTimeOffset.UtcNow;
+        var failing = DueConnection(now);
+        var succeeding = DueConnection(now);
+        var attempts = 0;
+
+        // When the heartbeat pass runs
+        await ConnectionPoolManager.HeartbeatDueConnectionsAsync(
+            new[] { failing, succeeding },
+            (_, _, _) =>
+            {
+                attempts++;
+                return attempts == 1
+                    ? Task.FromException(new InvalidOperationException("transient"))
+                    : Task.CompletedTask;
+            },
+            now,
+            CancellationToken.None);
+
+        // Then the failure is swallowed, the second connection is still attempted, and only the
+        // successful one records a heartbeat
+        Assert.Equal(2, attempts);
+        Assert.Equal(0, failing.RecordHeartbeatCount);
+        Assert.Equal(1, succeeding.RecordHeartbeatCount);
+    }
+
+    [Fact]
+    public async Task AcquireConnection_WhenPoolExhausted_TimesOutWithAdbcException()
+    {
         var authService = Substitute.For<IAuthenticationService>();
         authService.AuthenticateAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
@@ -205,32 +350,98 @@ public class ConnectionPoolManagerTests
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
             });
 
-        var heartbeatCallCount = 0;
-        var pool = new ConnectionPoolManager(
-            authService,
-            sessionCloser: null,
-            sessionHeartbeat: (_, _, _) =>
-            {
-                Interlocked.Increment(ref heartbeatCallCount);
-                return Task.CompletedTask;
-            });
-
+        using var pool = new ConnectionPoolManager(authService);
         var config = new ConnectionConfig
         {
             Account = "test",
             User = "user",
-            ClientSessionKeepAlive = true,
-            HeartbeatFrequency = TimeSpan.FromMilliseconds(1),
+            PoolConfig = new ConnectionPoolConfig { MaxPoolSize = 1, AcquireTimeout = TimeSpan.FromMilliseconds(100) },
         };
 
-        var connection = await pool.AcquireConnectionAsync(config);
-        pool.ReleaseConnection(connection);
+        // The first acquire takes the pool's only slot and is deliberately not released.
+        _ = await pool.AcquireConnectionAsync(config);
 
-        // Dispose cancels the cleanup loop, so the 60s PeriodicTimer never ticks
-        pool.Dispose();
+        // The second acquire finds the pool at capacity and times out instead of hanging forever.
+        var ex = await Assert.ThrowsAsync<AdbcException>(() => pool.AcquireConnectionAsync(config));
+        Assert.Contains("capacity", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
 
-        // Wait briefly to confirm no activity after dispose
-        await Task.Delay(100);
-        Assert.Equal(0, heartbeatCallCount);
+    // ---- GeneratePoolKey ----
+
+    private static ConnectionConfig BasicConfig() => new()
+    {
+        Account = "acct",
+        User = "user",
+        Database = "db",
+        Schema = "sch",
+        Warehouse = "wh",
+        Role = "role",
+        Authentication = new AuthenticationConfig { Type = AuthenticationType.UsernamePassword, Password = "secret" },
+    };
+
+    [Fact]
+    public void GeneratePoolKey_IdenticalConfigs_ProduceTheSameKey()
+    {
+        Assert.Equal(
+            ConnectionPoolManager.GeneratePoolKey(BasicConfig()),
+            ConnectionPoolManager.GeneratePoolKey(BasicConfig()));
+    }
+
+    [Fact]
+    public void GeneratePoolKey_DifferentPassword_ProducesDifferentKeys()
+    {
+        // Same user, different password → must not share a session
+        var a = BasicConfig();
+        var b = BasicConfig();
+        b.Authentication = new AuthenticationConfig { Type = AuthenticationType.UsernamePassword, Password = "other" };
+
+        Assert.NotEqual(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
+    }
+
+    [Fact]
+    public void GeneratePoolKey_DifferentOAuthTokenWithEmptyUser_ProducesDifferentKeys()
+    {
+        // OAuth derives the user from the token, so User is blank; keying on User alone would let two
+        // different tokens share one pooled session. The credential fingerprint must separate them.
+        var a = BasicConfig();
+        a.User = string.Empty;
+        a.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, OAuthToken = "token-A" };
+        var b = BasicConfig();
+        b.User = string.Empty;
+        b.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, OAuthToken = "token-B" };
+
+        Assert.NotEqual(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
+    }
+
+    [Fact]
+    public void GeneratePoolKey_DifferentHost_ProducesDifferentKeys()
+    {
+        var a = BasicConfig();
+        var b = BasicConfig();
+        b.Network = new NetworkConfig { Host = "other.snowflakecomputing.com" };
+
+        Assert.NotEqual(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
+    }
+
+    [Fact]
+    public void GeneratePoolKey_KeepAliveDifferenceOnly_ProducesTheSameKey()
+    {
+        // Keep-alive is client-side only (not sent at login), so it must not fragment the pool
+        var a = BasicConfig();
+        var b = BasicConfig();
+        b.ClientSessionKeepAlive = true;
+        b.HeartbeatFrequency = TimeSpan.FromMinutes(15);
+
+        Assert.Equal(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
+    }
+
+    [Fact]
+    public void GeneratePoolKey_DoesNotContainTheRawSecret()
+    {
+        // The password is hashed into the key, never embedded verbatim
+        var config = BasicConfig();
+        config.Authentication = new AuthenticationConfig { Type = AuthenticationType.UsernamePassword, Password = "hunter2" };
+
+        Assert.DoesNotContain("hunter2", ConnectionPoolManager.GeneratePoolKey(config));
     }
 }

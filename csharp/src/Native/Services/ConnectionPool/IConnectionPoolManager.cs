@@ -26,9 +26,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 
 /// <summary>

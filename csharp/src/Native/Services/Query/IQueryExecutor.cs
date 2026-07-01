@@ -30,7 +30,6 @@ using AdbcDrivers.Snowflake.Native.Services.Transport;
 using Apache.Arrow.Ipc;
 
 using Apache.Arrow;
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Query;
 
@@ -199,7 +198,7 @@ internal class QueryResult
     /// <summary>
     /// Gets or sets any errors that occurred during execution.
     /// </summary>
-    public List<QueryError> Errors { get; set; } = new();
+    public List<QueryError> Errors { get; set; } = [];
 
     /// <summary>
     /// Gets or sets additional metadata about the query execution.

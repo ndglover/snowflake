@@ -22,13 +22,8 @@
 */
 
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using AdbcDrivers.Snowflake.Native.Configuration;
-
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 
@@ -40,56 +35,44 @@ internal class ConnectionPoolEntry(ConnectionConfig config)
     /// <summary>
     /// Gets the connection configuration for this pool.
     /// </summary>
-    public ConnectionConfig Config { get; } = config;
+    internal ConnectionConfig Config { get; } = config;
 
     /// <summary>
     /// Gets the dictionary of active connections currently in use.
     /// </summary>
-    public ConcurrentDictionary<string, IPooledConnection> ActiveConnections { get; } = new();
+    internal ConcurrentDictionary<string, IPooledConnection> ActiveConnections { get; } = new();
 
     /// <summary>
     /// Gets the stack of idle connections available for reuse.
     /// </summary>
-    public ConcurrentStack<IPooledConnection> IdleConnections { get; } = new();
+    internal ConcurrentStack<IPooledConnection> IdleConnections { get; } = new();
 
     /// <summary>
     /// Gets the semaphore that enforces the maximum pool size.
     /// </summary>
-    public SemaphoreSlim CapacitySemaphore { get; } = new(
+    internal SemaphoreSlim CapacitySemaphore { get; } = new(
         config.PoolConfig.MaxPoolSize,
         config.PoolConfig.MaxPoolSize);
 
     /// <summary>
     /// Lock object for synchronizing access to idle connections.
     /// </summary>
-    public readonly object IdleLock = new();
+    internal readonly object IdleLock = new();
 
     private int _pendingRequests;
 
     /// <summary>
     /// Gets the number of threads currently waiting for a connection.
     /// </summary>
-    public int PendingRequests => _pendingRequests;
+    internal int PendingRequests => _pendingRequests;
 
     /// <summary>
     /// Increments the pending requests counter.
     /// </summary>
-    public void IncrementPendingRequests() => Interlocked.Increment(ref _pendingRequests);
+    internal void IncrementPendingRequests() => Interlocked.Increment(ref _pendingRequests);
 
     /// <summary>
     /// Decrements the pending requests counter.
     /// </summary>
-    public void DecrementPendingRequests() => Interlocked.Decrement(ref _pendingRequests);
-
-    /// <summary>
-    /// Gets all connections in the pool (both active and idle).
-    /// </summary>
-    /// <returns>An enumerable of all connections.</returns>
-    public IEnumerable<IPooledConnection> GetAllConnections()
-    {
-        foreach (var connection in ActiveConnections.Values)
-            yield return connection;
-        foreach (var connection in IdleConnections.ToArray())
-            yield return connection;
-    }
+    internal void DecrementPendingRequests() => Interlocked.Decrement(ref _pendingRequests);
 }

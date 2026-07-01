@@ -24,13 +24,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 
-using Apache.Arrow;
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
@@ -38,13 +38,16 @@ namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 /// <summary>
 /// Implements connection pooling for Snowflake connections.
 /// </summary>
-internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
+internal class ConnectionPoolManager : IConnectionPoolManager
 {
     private readonly IAuthenticationService _authService;
     private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionCloser;
     private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionHeartbeat;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, ConnectionPoolEntry> _pools;
-    private readonly CancellationTokenSource _cts = new();
+    // Signals the background maintenance loop (idle eviction + keep-alive heartbeats) to stop; the
+    // Cancel() lives in Dispose(), and the CTS itself is disposed only after the loop has exited.
+    private readonly CancellationTokenSource _cleanupCts = new();
     private readonly object _cleanupStartLock = new();
     private Task? _cleanupTask;
     private long _totalConnectionsCreated;
@@ -65,14 +68,21 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
     /// background loop heartbeats idle connections whose config has <c>ClientSessionKeepAlive</c> set
     /// and that are due, so long-idle pooled sessions don't lapse to master-token expiry.
     /// </param>
+    /// <param name="timeProvider">
+    /// Clock used for pool timekeeping (idle/lifetime checks, heartbeat scheduling, the background
+    /// timer). Defaults to <see cref="TimeProvider.System"/>; tests inject a fake to drive the loop
+    /// deterministically.
+    /// </param>
     public ConnectionPoolManager(
         IAuthenticationService authService,
         Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionCloser = null,
-        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionHeartbeat = null)
+        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionHeartbeat = null,
+        TimeProvider? timeProvider = null)
     {
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
         _sessionCloser = sessionCloser;
         _sessionHeartbeat = sessionHeartbeat;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _pools = new ConcurrentDictionary<string, ConnectionPoolEntry>();
     }
 
@@ -91,16 +101,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         if (TryAcquireIdleConnection(poolEntry, out var idleConnection))
             return idleConnection!;
 
-        poolEntry.IncrementPendingRequests();
-        try
-        {
-            await poolEntry.CapacitySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            poolEntry.DecrementPendingRequests();
-        }
-
+        await WaitForCapacityAsync(poolEntry, config, cancellationToken).ConfigureAwait(false);
+        
         try
         {
             if (TryAcquireIdleConnection(poolEntry, out var connection))
@@ -121,19 +123,51 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         }
     }
 
-    private bool IsConnectionValid(IPooledConnection connection)
+    /// <summary>
+    /// Waits (bounded by <see cref="ConnectionPoolConfig.AcquireTimeout"/>) for a capacity permit on
+    /// the pool entry, tracking the caller as a pending request while it waits. On return the caller
+    /// holds one permit and must release it. Throws <see cref="AdbcException"/> if the pool stays at
+    /// capacity past the timeout; a cancelled token propagates as <see cref="OperationCanceledException"/>.
+    /// Neither a timeout nor a cancellation consumes a permit.
+    /// </summary>
+    private static async Task WaitForCapacityAsync(
+        ConnectionPoolEntry poolEntry, ConnectionConfig config, CancellationToken cancellationToken)
     {
-        return !connection.IsDisposed && !connection.IsFaulted && !connection.IsTokenExpired &&
-               (DateTimeOffset.UtcNow - connection.CreatedAt) <= connection.Config.PoolConfig.MaxConnectionLifetime;
+        poolEntry.IncrementPendingRequests();
+        bool entered;
+        try
+        {
+            entered = await poolEntry.CapacitySemaphore
+                .WaitAsync(config.PoolConfig.AcquireTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            poolEntry.DecrementPendingRequests();
+        }
+
+        if (!entered)
+            throw new AdbcException(
+                $"Timed out after {config.PoolConfig.AcquireTimeout.TotalSeconds:0}s waiting for an available " +
+                $"connection; the pool is at capacity (max {config.PoolConfig.MaxPoolSize}).");
+    }
+
+    // Takes the evaluation instant as a parameter (rather than reading _timeProvider itself) so the
+    // clock is never touched while a caller holds poolEntry.IdleLock — no external call under a lock,
+    // and every connection in one operation is judged against the same instant.
+    private static bool IsConnectionValid(IPooledConnection connection, DateTimeOffset now)
+    {
+        return connection is { IsDisposed: false, IsFaulted: false, IsTokenExpired: false } &&
+               (now - connection.CreatedAt) <= connection.Config.PoolConfig.MaxConnectionLifetime;
     }
 
     private bool TryAcquireIdleConnection(ConnectionPoolEntry poolEntry, out IPooledConnection? idleConnection)
     {
+        var now = _timeProvider.GetUtcNow();
         lock (poolEntry.IdleLock)
         {
             while (poolEntry.IdleConnections.TryPop(out var connection))
             {
-                if (IsConnectionValid(connection))
+                if (IsConnectionValid(connection, now))
                 {
                     connection.UpdateLastUsedAt();
                     poolEntry.ActiveConnections.TryAdd(connection.ConnectionId, connection);
@@ -161,7 +195,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
             return;
 
         poolEntry.ActiveConnections.TryRemove(connection.ConnectionId, out _);
-        if (IsConnectionValid(connection))
+        if (IsConnectionValid(connection, _timeProvider.GetUtcNow()))
             poolEntry.IdleConnections.Push(connection);
         else
         {
@@ -181,7 +215,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 
         _disposed = true;
 
-        _cts.Cancel();
+        _cleanupCts.Cancel();
 
         if (_cleanupTask != null)
         {
@@ -196,14 +230,14 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
         }
 
         // Dispose the CTS only after the cleanup loop has stopped using its token.
-        _cts.Dispose();
+        _cleanupCts.Dispose();
 
         foreach (var poolEntry in _pools.Values)
         {
-            foreach (var connection in poolEntry.GetAllConnections())
-            {
+            foreach (var connection in poolEntry.ActiveConnections.Values)
                 connection.Dispose();
-            }
+            foreach (var connection in poolEntry.IdleConnections)
+                connection.Dispose();
 
             poolEntry.CapacitySemaphore.Dispose();
         }
@@ -222,10 +256,13 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 
     private async Task CleanupLoopAsync()
     {
-        var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
-        // Capture the token once: re-reading _cts.Token each iteration races with Dispose() and
-        // throws ObjectDisposedException once the CTS is disposed.
-        CancellationToken token = _cts.Token;
+        var timer = new PeriodicTimer(TimeSpan.FromSeconds(60), _timeProvider);
+        // Capture the token once. The throwing member is the CancellationTokenSource.Token getter —
+        // it throws ObjectDisposedException after the source is disposed. Dispose() waits up to 5s
+        // for this loop before disposing the CTS, but a tick can overrun that wait, so re-reading
+        // _cleanupCts.Token could then hit the disposed source. This value-type copy stays usable (already
+        // cancelled), so the loop exits cleanly instead of throwing.
+        CancellationToken token = _cleanupCts.Token;
         try
         {
             while (await timer.WaitForNextTickAsync(token))
@@ -257,7 +294,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
 
         foreach (var poolEntry in _pools.Values)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             var connectionsToKeep = new List<IPooledConnection>();
             var connectionsToRemove = new List<IPooledConnection>();
             lock (poolEntry.IdleLock)
@@ -265,7 +302,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
                 while (poolEntry.IdleConnections.TryPop(out var connection))
                 {
                     var idleTime = now - connection.LastUsedAt;
-                    if (!IsConnectionValid(connection) ||
+                    if (!IsConnectionValid(connection, now) ||
                         idleTime > poolEntry.Config.PoolConfig.IdleTimeout)
                         connectionsToRemove.Add(connection);
                     else
@@ -303,40 +340,46 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
     }
 
     /// <summary>
-    /// Pings the keep-alive endpoint for every idle connection that is due (see
-    /// <see cref="IsHeartbeatDue"/>). Idle-only by design: idle connections have no in-flight query,
-    /// so a heartbeat can't race the reactive token renewal a running query may trigger. Best-effort —
-    /// a failed heartbeat just leaves the next query to renew reactively.
+    /// Pings the keep-alive endpoint for every idle connection that is due. Idle-only by design:
+    /// idle connections have no in-flight query, so a heartbeat can't race the reactive token renewal
+    /// a running query may trigger.
     /// </summary>
-    private async Task HeartbeatIdleConnectionsAsync(CancellationToken token)
+    private Task HeartbeatIdleConnectionsAsync(CancellationToken token)
     {
         if (_sessionHeartbeat == null)
-            return;
+            return Task.CompletedTask;
 
-        var now = DateTimeOffset.UtcNow;
-        List<IPooledConnection>? due = null;
+        // ConcurrentStack.ToArray is a lock-free snapshot; a connection acquired between here and the
+        // heartbeat will have a fresh LastUsedAt and so won't be due.
+        var idle = new List<IPooledConnection>();
         foreach (var poolEntry in _pools.Values)
-        {
-            // ConcurrentStack.ToArray is a lock-free snapshot; a connection acquired between here and
-            // the heartbeat will have a fresh LastUsedAt and so won't be due on the next pass.
-            foreach (var connection in poolEntry.IdleConnections.ToArray())
-            {
-                if (!connection.IsDisposed && IsHeartbeatDue(connection, now))
-                    (due ??= new List<IPooledConnection>()).Add(connection);
-            }
-        }
+            idle.AddRange(poolEntry.IdleConnections.ToArray());
 
-        if (due == null)
-            return;
+        return HeartbeatDueConnectionsAsync(idle, _sessionHeartbeat, _timeProvider.GetUtcNow(), token);
+    }
 
-        foreach (var connection in due)
+    /// <summary>
+    /// Heartbeats each connection that is due (see <see cref="IsHeartbeatDue"/>), recording the
+    /// heartbeat on success. Pure over the supplied connections and clock so the scheduling can be
+    /// tested without the background timer. Best-effort: a failing heartbeat is swallowed so one bad
+    /// connection doesn't stop the rest — it is recovered by reactive renewal on the next query.
+    /// </summary>
+    internal static async Task HeartbeatDueConnectionsAsync(
+        IEnumerable<IPooledConnection> connections,
+        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task> heartbeat,
+        DateTimeOffset now,
+        CancellationToken token)
+    {
+        foreach (var connection in connections)
         {
             if (token.IsCancellationRequested)
                 return;
+            if (connection.IsDisposed || !IsHeartbeatDue(connection, now))
+                continue;
 
             try
             {
-                await _sessionHeartbeat(connection.AuthToken, connection.Config, token).ConfigureAwait(false);
+                await heartbeat(connection.AuthToken, connection.Config, token).ConfigureAwait(false);
                 connection.RecordHeartbeat();
             }
             catch
@@ -361,13 +404,48 @@ internal class ConnectionPoolManager : IConnectionPoolManager, IDisposable
             Guid.NewGuid().ToString(),
             authToken,
             config,
-            _sessionCloser == null ? null : () => _sessionCloser(authToken, config, CancellationToken.None));
+            _sessionCloser == null ? null : () => _sessionCloser(authToken, config, CancellationToken.None),
+            _timeProvider);
     }
 
-    private static string GeneratePoolKey(ConnectionConfig config)
+    /// <summary>
+    /// Builds the key that decides which connections may be pooled together. Connections share a key
+    /// only when reusing one for the other is safe — so the key spans everything that determines the
+    /// authenticated session's identity: the account/user/db/schema/warehouse/role, the auth type and
+    /// a fingerprint of its secret, and the network endpoint. It deliberately excludes client-side-only
+    /// settings (keep-alive/heartbeat cadence, query timeout, compression, pool sizing) that don't
+    /// change the server session, so they don't needlessly fragment the pool.
+    /// </summary>
+    internal static string GeneratePoolKey(ConnectionConfig config)
     {
-        return $"{config.Account}|{config.User}|{config.Database}|{config.Schema}|{config.Warehouse}|{config.Role}";
+        var auth = config.Authentication;
+        var network = config.Network;
+        return string.Join('|',
+            config.Account, config.User, config.Database, config.Schema, config.Warehouse, config.Role,
+            auth.Type, HashSecret(CredentialSecret(auth)),
+            network.Host, network.Port, network.Protocol, network.NoProxy, network.SslSkipVerify);
     }
+
+    /// <summary>
+    /// The secret that distinguishes one credential from another for the current auth type, or null
+    /// when the type carries no static secret (SSO / external browser).
+    /// </summary>
+    private static string? CredentialSecret(AuthenticationConfig auth) => auth.Type switch
+    {
+        AuthenticationType.UsernamePassword => auth.Password,
+        AuthenticationType.OAuth => auth.OAuthToken,
+        AuthenticationType.KeyPair => $"{auth.PrivateKey ?? auth.PrivateKeyPath} {auth.PrivateKeyPassphrase}",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Hashes a credential into a fingerprint so different secrets land in different pools without the
+    /// raw secret ever appearing in the key string (which could otherwise surface in logs or dumps).
+    /// </summary>
+    private static string HashSecret(string? secret) =>
+        string.IsNullOrEmpty(secret)
+            ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 
     public Task<PoolStatistics> GetStatisticsAsync()
     {

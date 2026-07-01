@@ -21,9 +21,6 @@
 * limitations under the License.
 */
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.Transport;
 
 /// <summary>

@@ -24,9 +24,6 @@
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
 /// <summary>
@@ -89,7 +86,7 @@ internal class AuthenticationConfig
                 {
                     results.Add(new ValidationResult(
                         "Password is required for username/password authentication.",
-                        new[] { nameof(Password) }));
+                        [nameof(Password)]));
                 }
                 break;
 
@@ -98,7 +95,7 @@ internal class AuthenticationConfig
                 {
                     results.Add(new ValidationResult(
                         "Private key path or private key value is required for key pair authentication.",
-                        new[] { nameof(PrivateKeyPath), nameof(PrivateKey) }));
+                        [nameof(PrivateKeyPath), nameof(PrivateKey)]));
                 }
                 break;
 
@@ -107,7 +104,7 @@ internal class AuthenticationConfig
                 {
                     results.Add(new ValidationResult(
                         "OAuth token is required for OAuth authentication.",
-                        new[] { nameof(OAuthToken) }));
+                        [nameof(OAuthToken)]));
                 }
                 break;
 

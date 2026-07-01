@@ -26,9 +26,6 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
 /// <summary>
@@ -177,9 +174,16 @@ internal static class ConnectionStringParser
             poolConfig.MaxPoolSize = maxPoolSize;
         }
 
-        if ((parameters.TryGetValue("waitingforidlesessiontimeout", out string? idleTimeoutStr) || parameters.TryGetValue("pool_idle_timeout", out idleTimeoutStr)))
+        if (parameters.TryGetValue("pool_idle_timeout", out string? idleTimeoutStr))
         {
             poolConfig.IdleTimeout = ParseTimeSpan(idleTimeoutStr);
+        }
+
+        // waitingForIdleSessionTimeout is the Snowflake .NET connector's name for the pool-wait
+        // timeout (how long to wait for a free connection), not the idle-eviction timeout.
+        if ((parameters.TryGetValue("waitingforidlesessiontimeout", out string? acquireTimeoutStr) || parameters.TryGetValue("pool_acquire_timeout", out acquireTimeoutStr)))
+        {
+            poolConfig.AcquireTimeout = ParseTimeSpan(acquireTimeoutStr);
         }
 
         if ((parameters.TryGetValue("expirationtimeout", out string? maxLifetimeStr) || parameters.TryGetValue("pool_max_lifetime", out maxLifetimeStr)))

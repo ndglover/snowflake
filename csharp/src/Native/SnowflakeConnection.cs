@@ -159,7 +159,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     /// The table types reported by the Snowflake driver. Matches the Go driver's
     /// ListTableTypes (TABLE, VIEW).
     /// </summary>
-    private static readonly string[] SnowflakeTableTypes = { "TABLE", "VIEW" };
+    private static readonly string[] SnowflakeTableTypes = ["TABLE", "VIEW"];
 
     /// <summary>
     /// Gets the supported table types.
@@ -172,7 +172,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         var tableTypesBuilder = new StringArray.Builder();
         tableTypesBuilder.AppendRange(SnowflakeTableTypes);
 
-        IArrowArray[] dataArrays = { tableTypesBuilder.Build() };
+        IArrowArray[] dataArrays = [tableTypesBuilder.Build()];
 
         return new InMemoryArrowStream(StandardSchemas.TableTypesSchema, dataArrays);
     }
@@ -238,12 +238,12 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         typeof(IArrowArray).Assembly.GetName().Version?.ToString() ?? "0.0.0";
 
     private static readonly AdbcInfoCode[] InfoSupportedCodes =
-    {
+    [
         AdbcInfoCode.VendorName,
         AdbcInfoCode.DriverName,
         AdbcInfoCode.DriverVersion,
         AdbcInfoCode.DriverArrowVersion
-    };
+    ];
 
     /// <summary>
     /// Gets metadata about the driver and database.
@@ -321,14 +321,14 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             new ArrowBuffer.BitmapBuilder().Build());
 
         IArrowArray[] childArrays =
-        {
+        [
             stringValueBuilder.Build(),
             new BooleanArray.Builder().Build(),
             new Int64Array.Builder().Build(),
             new Int32Array.Builder().Build(),
             new ListArray.Builder(StringType.Default).Build(),
             new List<IArrowArray?> { entriesDataArray }.BuildListArrayForType(entryType)
-        };
+        ];
 
         var infoValue = new DenseUnionArray(
             infoUnionType,
@@ -339,10 +339,10 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             nullCount);
 
         IArrowArray[] dataArrays =
-        {
+        [
             infoNameBuilder.Build(),
             infoValue
-        };
+        ];
 
         return new InMemoryArrowStream(StandardSchemas.GetInfoSchema, dataArrays);
     }

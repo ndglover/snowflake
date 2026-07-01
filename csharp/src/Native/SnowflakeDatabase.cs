@@ -34,8 +34,6 @@ using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 using AdbcDrivers.Snowflake.Native.Services.Query;
 using AdbcDrivers.Snowflake.Native.Services.Transport;
 using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
-
-using Apache.Arrow;
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native;

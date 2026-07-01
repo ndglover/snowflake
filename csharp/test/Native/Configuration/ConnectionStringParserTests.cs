@@ -159,6 +159,28 @@ public class ConnectionStringParserTests
     }
 
     [Fact]
+    public void Parse_WithoutAcquireTimeout_DefaultsTo120Seconds()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(TimeSpan.FromSeconds(120), config.PoolConfig.AcquireTimeout);
+    }
+
+    [Fact]
+    public void Parse_WithWaitingForIdleSessionTimeout_SetsAcquireTimeout()
+    {
+        // The Snowflake connector's waitingForIdleSessionTimeout is the pool-wait timeout, not idle eviction
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;waitingforidlesessiontimeout=30");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), config.PoolConfig.AcquireTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(10), config.PoolConfig.IdleTimeout); // unchanged (default)
+    }
+
+    [Fact]
     public void Parse_WithPoolConfiguration_ShouldReturnValidConfig()
     {
         // Arrange

@@ -22,13 +22,9 @@
 */
 
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
-
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 
@@ -41,6 +37,7 @@ internal class PooledConnection : IPooledConnection
     private DateTimeOffset _lastHeartbeatAt;
     private bool _disposed;
     private readonly Func<Task>? _sessionCloser;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PooledConnection"/> class.
@@ -52,16 +49,19 @@ internal class PooledConnection : IPooledConnection
     /// Optional best-effort callback that closes the server-side Snowflake session; invoked when the
     /// pool discards this connection (not when it is returned to the idle pool for reuse).
     /// </param>
+    /// <param name="timeProvider">Clock for the connection's timestamps. Defaults to <see cref="TimeProvider.System"/>.</param>
     public PooledConnection(
         string connectionId,
         AuthenticationToken authToken,
         ConnectionConfig config,
-        Func<Task>? sessionCloser = null)
+        Func<Task>? sessionCloser = null,
+        TimeProvider? timeProvider = null)
     {
         ConnectionId = connectionId ?? throw new ArgumentNullException(nameof(connectionId));
         AuthToken = authToken ?? throw new ArgumentNullException(nameof(authToken));
         Config = config ?? throw new ArgumentNullException(nameof(config));
-        CreatedAt = DateTimeOffset.UtcNow;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        CreatedAt = _timeProvider.GetUtcNow();
         _lastUsedAt = CreatedAt;
         _lastHeartbeatAt = CreatedAt;
         _sessionCloser = sessionCloser;
@@ -81,7 +81,9 @@ internal class PooledConnection : IPooledConnection
 
     public bool IsDisposed => _disposed;
 
-    public bool IsTokenExpired => AuthToken.IsExpired;
+    // Evaluated against the pool's clock (not AuthToken.IsExpired, which reads the wall clock) so all
+    // pool timekeeping — idle, lifetime, token expiry — shares one clock and is testable together.
+    public bool IsTokenExpired => _timeProvider.GetUtcNow() >= AuthToken.ExpiresAt;
 
     public bool IsFaulted { get; private set; }
 
@@ -90,12 +92,12 @@ internal class PooledConnection : IPooledConnection
     /// <summary>
     /// Updates the last used timestamp (internal use only).
     /// </summary>
-    void IPooledConnection.UpdateLastUsedAt() => _lastUsedAt = DateTimeOffset.UtcNow;
+    void IPooledConnection.UpdateLastUsedAt() => _lastUsedAt = _timeProvider.GetUtcNow();
 
     /// <summary>
     /// Records that a keep-alive heartbeat just succeeded (internal use only).
     /// </summary>
-    void IPooledConnection.RecordHeartbeat() => _lastHeartbeatAt = DateTimeOffset.UtcNow;
+    void IPooledConnection.RecordHeartbeat() => _lastHeartbeatAt = _timeProvider.GetUtcNow();
 
     /// <summary>
     /// Disposes the connection.

@@ -28,7 +28,6 @@ using System.Text.Json;
 using Apache.Arrow.Types;
 
 using Apache.Arrow;
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 

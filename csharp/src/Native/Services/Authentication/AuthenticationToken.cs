@@ -23,9 +23,6 @@
 
 using System;
 
-using Apache.Arrow;
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
 /// <summary>
@@ -67,16 +64,6 @@ internal class AuthenticationToken
     /// Gets or sets the session ID.
     /// </summary>
     public string? SessionId { get; set; }
-
-    /// <summary>
-    /// Gets a value indicating whether the token is expired.
-    /// </summary>
-    public bool IsExpired => DateTimeOffset.UtcNow >= ExpiresAt;
-
-    /// <summary>
-    /// Gets a value indicating whether the token will expire soon (within 5 minutes).
-    /// </summary>
-    public bool IsExpiringSoon => DateTimeOffset.UtcNow.AddMinutes(5) >= ExpiresAt;
 
     /// <summary>
     /// Gets a value indicating whether the token can be refreshed.

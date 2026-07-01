@@ -103,9 +103,10 @@ public class StatementTests
         using var connection = database.Connect(new Dictionary<string, string>());
         using var statement = connection.CreateStatement();
 
-        // When / Then GetParameterSchema throws: Snowflake's protocol does not report
-        // bind-parameter types, so it is unsupported regardless of whether Prepare was called.
-        Assert.Throws<NotImplementedException>(statement.GetParameterSchema);
+        // When / Then GetParameterSchema throws AdbcException(NotImplemented): Snowflake's protocol
+        // does not report bind-parameter types, so it is unsupported regardless of whether Prepare ran.
+        var ex = Assert.Throws<AdbcException>(statement.GetParameterSchema);
+        Assert.Equal(AdbcStatusCode.NotImplemented, ex.Status);
     }
 
     [SkippableFact]

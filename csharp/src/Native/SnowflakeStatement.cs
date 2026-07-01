@@ -289,7 +289,7 @@ public sealed class SnowflakeStatement : AdbcStatement
     {
         ThrowIfDisposed();
 
-        throw new NotImplementedException("Snowflake does not provide a parameter schema.");
+        throw AdbcException.NotImplemented("Snowflake does not provide a parameter schema.");
     }
 
     /// <summary>

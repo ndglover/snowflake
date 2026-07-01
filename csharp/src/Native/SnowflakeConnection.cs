@@ -353,7 +353,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     public override void Commit()
     {
         ThrowIfDisposed();
-        throw new NotImplementedException("Transaction support not yet implemented");
+        throw AdbcException.NotImplemented("Transaction support not yet implemented");
     }
 
     /// <summary>
@@ -362,7 +362,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     public override void Rollback()
     {
         ThrowIfDisposed();
-        throw new NotImplementedException("Transaction support not yet implemented");
+        throw AdbcException.NotImplemented("Transaction support not yet implemented");
     }
 
     /// <summary>

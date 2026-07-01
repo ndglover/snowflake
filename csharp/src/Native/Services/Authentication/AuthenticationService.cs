@@ -27,6 +27,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 
+using Apache.Arrow.Adbc;
+
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
 /// <summary>
@@ -127,11 +129,10 @@ internal class AuthenticationService : IAuthenticationService
         AuthenticationToken token,
         CancellationToken cancellationToken = default)
     {
-        if (token == null)
-            throw new ArgumentNullException(nameof(token));
+        ArgumentNullException.ThrowIfNull(token);
 
         if (!token.CanRefresh)
-            throw new InvalidOperationException("Token cannot be refreshed. No refresh token available.");
+            throw new AdbcException("Token cannot be refreshed. No refresh token available.");
 
         return await _oauthAuth.RefreshTokenAsync(token.RefreshToken!, cancellationToken);
     }

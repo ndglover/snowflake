@@ -25,15 +25,11 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
-using System.Threading;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
-using AdbcDrivers.Snowflake.Native.Services.Query;
-using AdbcDrivers.Snowflake.Native.Services.Transport;
-using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
+using AdbcDrivers.Snowflake.Native.Services.Session;
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native;
@@ -70,30 +66,11 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         var ssoAuth = new SsoAuthenticator(loginClient, _httpClient);
 
         var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, ssoAuth);
-        _connectionPool = new ConnectionPoolManager(
-            authService,
-            loginClient.CloseSessionAsync,
-            HeartbeatSessionAsync);
+        var sessionClient = new SnowflakeSessionClient(loginClient, _httpClient, _loggerFactory);
+        _connectionPool = new ConnectionPoolManager(authService, sessionClient);
     }
 
-    /// <summary>
-    /// Pings the session keep-alive endpoint for a pooled connection. Builds a transient
-    /// <see cref="QueryExecutor"/> over the shared <see cref="HttpClient"/> (the same way a
-    /// connection does) so the pool can heartbeat without holding a per-connection executor.
-    /// </summary>
-    private Task HeartbeatSessionAsync(AuthenticationToken token, ConnectionConfig config, CancellationToken cancellationToken)
-    {
-        var apiClient = new RestApiClient(_httpClient, config.EnableCompression);
-        var executor = new QueryExecutor(
-            apiClient,
-            new TypeConverter(),
-            config.Account,
-            config.Network,
-            _loggerFactory?.CreateLogger<QueryExecutor>() ?? NullLogger<QueryExecutor>.Instance);
-        return executor.HeartbeatAsync(token, cancellationToken);
-    }
-
-    private static NetworkConfig ParseNetworkFromParameters(IReadOnlyDictionary<string, string>? parameters)
+    static NetworkConfig ParseNetworkFromParameters(IReadOnlyDictionary<string, string>? parameters)
     {
         var network = new NetworkConfig();
         if (parameters == null) return network;
@@ -118,24 +95,14 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         return network;
     }
 
-    private static HttpClient CreateHttpClient(NetworkConfig network)
+    static HttpClient CreateHttpClient(NetworkConfig network)
     {
         var handler = new HttpClientHandler();
-
-        // Allow enough concurrent connections for parallel chunk prefetching. The
-        // net8.0 default is effectively unbounded, but set it explicitly so the
-        // result-chunk downloaders aren't throttled (and to be safe under any host).
-        handler.MaxConnectionsPerServer = 32;
-
         if (network.SslSkipVerify)
-        {
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        }
 
         if (network.NoProxy)
-        {
             handler.UseProxy = false;
-        }
 
         return new HttpClient(handler);
     }

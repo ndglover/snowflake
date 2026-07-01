@@ -47,7 +47,7 @@ public class PooledConnectionTests
             "id",
             token,
             new ConnectionConfig { Account = "test" },
-            sessionCloser: null,
+            sessionLifecycle: null,
             timeProvider: fakeTime);
 
         // Then it is valid now, still valid just before expiry, and expired once the clock passes it

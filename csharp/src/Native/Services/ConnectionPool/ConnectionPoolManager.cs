@@ -41,8 +41,7 @@ namespace AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
 internal class ConnectionPoolManager : IConnectionPoolManager
 {
     private readonly IAuthenticationService _authService;
-    private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionCloser;
-    private readonly Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? _sessionHeartbeat;
+    private readonly ISessionLifecycle? _sessionLifecycle;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, ConnectionPoolEntry> _pools;
     // Signals the background maintenance loop (idle eviction + keep-alive heartbeats) to stop; the
@@ -59,14 +58,10 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     /// Initializes a new instance of the <see cref="ConnectionPoolManager"/> class.
     /// </summary>
     /// <param name="authService">The authentication service.</param>
-    /// <param name="sessionCloser">
-    /// Optional best-effort callback to close a connection's server-side session when the pool
-    /// discards it (so sessions aren't orphaned until they time out).
-    /// </param>
-    /// <param name="sessionHeartbeat">
-    /// Optional callback that pings a connection's session keep-alive endpoint. When supplied, the
-    /// background loop heartbeats idle connections whose config has <c>ClientSessionKeepAlive</c> set
-    /// and that are due, so long-idle pooled sessions don't lapse to master-token expiry.
+    /// <param name="sessionLifecycle">
+    /// Optional collaborator for server-side session upkeep: it heartbeats idle keep-alive connections
+    /// (so long-idle pooled sessions don't lapse to master-token expiry) and closes a connection's
+    /// session when the pool discards it (so sessions aren't orphaned until they time out).
     /// </param>
     /// <param name="timeProvider">
     /// Clock used for pool timekeeping (idle/lifetime checks, heartbeat scheduling, the background
@@ -75,13 +70,11 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     /// </param>
     public ConnectionPoolManager(
         IAuthenticationService authService,
-        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionCloser = null,
-        Func<AuthenticationToken, ConnectionConfig, CancellationToken, Task>? sessionHeartbeat = null,
+        ISessionLifecycle? sessionLifecycle = null,
         TimeProvider? timeProvider = null)
     {
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
-        _sessionCloser = sessionCloser;
-        _sessionHeartbeat = sessionHeartbeat;
+        _sessionLifecycle = sessionLifecycle;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _pools = new ConcurrentDictionary<string, ConnectionPoolEntry>();
     }
@@ -346,7 +339,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     /// </summary>
     private Task HeartbeatIdleConnectionsAsync(CancellationToken token)
     {
-        if (_sessionHeartbeat == null)
+        if (_sessionLifecycle == null)
             return Task.CompletedTask;
 
         // ConcurrentStack.ToArray is a lock-free snapshot; a connection acquired between here and the
@@ -355,7 +348,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         foreach (var poolEntry in _pools.Values)
             idle.AddRange(poolEntry.IdleConnections.ToArray());
 
-        return HeartbeatDueConnectionsAsync(idle, _sessionHeartbeat, _timeProvider.GetUtcNow(), token);
+        return HeartbeatDueConnectionsAsync(idle, _sessionLifecycle.HeartbeatAsync, _timeProvider.GetUtcNow(), token);
     }
 
     /// <summary>
@@ -404,7 +397,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
             Guid.NewGuid().ToString(),
             authToken,
             config,
-            _sessionCloser == null ? null : () => _sessionCloser(authToken, config, CancellationToken.None),
+            _sessionLifecycle,
             _timeProvider);
     }
 

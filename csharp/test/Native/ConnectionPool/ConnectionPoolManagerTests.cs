@@ -150,7 +150,7 @@ public class ConnectionPoolManagerTests
     [Fact]
     public async Task Pool_WithNoHeartbeatDelegate_DisposesCleanly()
     {
-        // Create pool with no sessionHeartbeat delegate, acquire+release, dispose — no crash
+        // Create pool with no session-lifecycle collaborator, acquire+release, dispose — no crash
         var authService = Substitute.For<IAuthenticationService>();
         authService.AuthenticateAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
@@ -162,7 +162,7 @@ public class ConnectionPoolManagerTests
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
             });
 
-        var pool = new ConnectionPoolManager(authService, sessionCloser: null, sessionHeartbeat: null);
+        var pool = new ConnectionPoolManager(authService, sessionLifecycle: null);
         try
         {
             var config = new ConnectionConfig
@@ -282,10 +282,13 @@ public class ConnectionPoolManagerTests
             });
 
         var heartbeatFired = new TaskCompletionSource();
+        var sessionLifecycle = Substitute.For<ISessionLifecycle>();
+        sessionLifecycle
+            .HeartbeatAsync(Arg.Any<AuthenticationToken>(), Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { heartbeatFired.TrySetResult(); return Task.CompletedTask; });
         using var pool = new ConnectionPoolManager(
             authService,
-            sessionCloser: null,
-            sessionHeartbeat: (_, _, _) => { heartbeatFired.TrySetResult(); return Task.CompletedTask; },
+            sessionLifecycle,
             timeProvider: fakeTime);
 
         var config = new ConnectionConfig

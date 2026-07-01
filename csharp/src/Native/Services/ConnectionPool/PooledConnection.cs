@@ -22,7 +22,7 @@
 */
 
 using System;
-using System.Threading.Tasks;
+using System.Threading;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.Authentication;
 
@@ -36,7 +36,7 @@ internal class PooledConnection : IPooledConnection
     private DateTimeOffset _lastUsedAt;
     private DateTimeOffset _lastHeartbeatAt;
     private bool _disposed;
-    private readonly Func<Task>? _sessionCloser;
+    private readonly ISessionLifecycle? _sessionLifecycle;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>
@@ -45,16 +45,17 @@ internal class PooledConnection : IPooledConnection
     /// <param name="connectionId">The connection ID.</param>
     /// <param name="authToken">The authentication token.</param>
     /// <param name="config">The connection configuration.</param>
-    /// <param name="sessionCloser">
-    /// Optional best-effort callback that closes the server-side Snowflake session; invoked when the
-    /// pool discards this connection (not when it is returned to the idle pool for reuse).
+    /// <param name="sessionLifecycle">
+    /// Optional session-lifecycle collaborator; its <see cref="ISessionLifecycle.CloseAsync"/> is
+    /// invoked when the pool discards this connection (not when it is returned to the idle pool for
+    /// reuse), so the server-side session isn't orphaned.
     /// </param>
     /// <param name="timeProvider">Clock for the connection's timestamps. Defaults to <see cref="TimeProvider.System"/>.</param>
     public PooledConnection(
         string connectionId,
         AuthenticationToken authToken,
         ConnectionConfig config,
-        Func<Task>? sessionCloser = null,
+        ISessionLifecycle? sessionLifecycle = null,
         TimeProvider? timeProvider = null)
     {
         ConnectionId = connectionId ?? throw new ArgumentNullException(nameof(connectionId));
@@ -64,7 +65,7 @@ internal class PooledConnection : IPooledConnection
         CreatedAt = _timeProvider.GetUtcNow();
         _lastUsedAt = CreatedAt;
         _lastHeartbeatAt = CreatedAt;
-        _sessionCloser = sessionCloser;
+        _sessionLifecycle = sessionLifecycle;
     }
 
     public string ConnectionId { get; }
@@ -111,11 +112,11 @@ internal class PooledConnection : IPooledConnection
 
         // Best-effort: close the server-side session so it isn't orphaned until it times out.
         // Bounded so a slow/hung close can't stall teardown; a failure just lets the session expire.
-        if (_sessionCloser != null)
+        if (_sessionLifecycle != null)
         {
             try
             {
-                _sessionCloser().Wait(TimeSpan.FromSeconds(5));
+                _sessionLifecycle.CloseAsync(AuthToken, Config, CancellationToken.None).Wait(TimeSpan.FromSeconds(5));
             }
             catch
             {

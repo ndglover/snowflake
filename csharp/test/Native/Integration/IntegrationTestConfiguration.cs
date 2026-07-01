@@ -90,19 +90,19 @@ internal class IntegrationTestConfiguration : TestConfiguration
     public SnowflakeAuthentication Authentication { get; set; } = new();
 
     /// <summary>
-    /// Whether to skip SSL certificate verification (e.g., for privatelink endpoints).
+    /// Whether to skip TLS certificate verification (e.g., for privatelink endpoints).
     /// </summary>
-    [JsonPropertyName("ssl_skip_verify")]
-    public bool SslSkipVerify { get; set; } = false;
+    [JsonPropertyName("tls_skip_verify")]
+    public bool TlsSkipVerify { get; set; } = false;
 
 
 }
 
 public class SnowflakeAuthentication
 {
-    public const string AuthOAuth = "auth_oauth";
-    public const string AuthJwt = "auth_jwt";
-    public const string AuthSnowflake = "auth_snowflake";
+    const string AuthOAuth = "auth_oauth";
+    const string AuthJwt = "auth_jwt";
+    const string AuthSnowflake = "auth_snowflake";
 
     [JsonPropertyName(AuthOAuth)]
     public OAuthAuthentication? OAuth { get; set; }

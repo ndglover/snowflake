@@ -73,7 +73,7 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     static HttpClient CreateHttpClient(NetworkConfig network)
     {
         var handler = new HttpClientHandler();
-        if (network.SslSkipVerify)
+        if (network.TlsSkipVerify)
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
 
         if (network.NoProxy)

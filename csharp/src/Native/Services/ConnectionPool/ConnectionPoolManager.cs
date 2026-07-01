@@ -386,12 +386,24 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         ConnectionConfig config,
         CancellationToken cancellationToken)
     {
-        var authToken = await _authService.AuthenticateAsync(
-            config.Account,
-            config.User,
-            config.Authentication,
-            config,
-            cancellationToken);
+        // Bound the login/auth round trip by LoginTimeout, without swallowing a caller cancellation.
+        using var loginCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        loginCts.CancelAfter(config.LoginTimeout);
+
+        AuthenticationToken authToken;
+        try
+        {
+            authToken = await _authService.AuthenticateAsync(
+                config.Account,
+                config.User,
+                config.Authentication,
+                config,
+                loginCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AdbcException($"Login timed out after {config.LoginTimeout.TotalSeconds:0}s.");
+        }
 
         return new PooledConnection(
             Guid.NewGuid().ToString(),
@@ -416,7 +428,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         return string.Join('|',
             config.Account, config.User, config.Database, config.Schema, config.Warehouse, config.Role,
             auth.Type, HashSecret(CredentialSecret(auth)),
-            network.Host, network.Port, network.Protocol, network.NoProxy, network.SslSkipVerify);
+            network.Host, network.Port, network.Protocol, network.NoProxy, network.TlsSkipVerify);
     }
 
     /// <summary>

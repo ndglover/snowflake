@@ -104,10 +104,10 @@ public class ConnectionStringParserTests
     }
 
     [Fact]
-    public void Parse_WithTimeoutSettings_ShouldReturnValidConfig()
+    public void Parse_WithRequestTimeout_SetsQueryTimeout()
     {
-        // Arrange
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;connection_timeout=300");
+        // Arrange - request_timeout maps to the statement/query timeout (STATEMENT_TIMEOUT_IN_SECONDS)
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;adbc.snowflake.sql.client_option.request_timeout=300");
 
         // Act
         var config = ConnectionStringParser.ParseParameters(parameters);
@@ -169,10 +169,9 @@ public class ConnectionStringParserTests
     }
 
     [Fact]
-    public void Parse_WithWaitingForIdleSessionTimeout_SetsAcquireTimeout()
+    public void Parse_WithPoolAcquireTimeout_SetsAcquireTimeout()
     {
-        // The Snowflake connector's waitingForIdleSessionTimeout is the pool-wait timeout, not idle eviction
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;waitingforidlesessiontimeout=30");
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;adbc.snowflake.pool.acquire_timeout=30");
 
         var config = ConnectionStringParser.ParseParameters(parameters);
 
@@ -181,17 +180,37 @@ public class ConnectionStringParserTests
     }
 
     [Fact]
-    public void Parse_WithPoolConfiguration_ShouldReturnValidConfig()
+    public void Parse_WithPoolMaxSize_SetsMaxPoolSize()
     {
-        // Arrange
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;max_pool_size=20");
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;adbc.snowflake.pool.max_size=20");
 
-        // Act
         var config = ConnectionStringParser.ParseParameters(parameters);
 
-        // Assert
-        Assert.NotNull(config);
         Assert.Equal(20, config.PoolConfig.MaxPoolSize);
+    }
+
+    [Fact]
+    public void Parse_WithLoginTimeoutAndPrefetch_SetsBoth()
+    {
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.snowflake.sql.client_option.login_timeout=45;adbc.snowflake.rpc.prefetch_concurrency=4");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(TimeSpan.FromSeconds(45), config.LoginTimeout);
+        Assert.Equal(4, config.PrefetchConcurrency);
+    }
+
+    [Fact]
+    public void Parse_WithoutOptionalTimeouts_UsesDefaults()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(TimeSpan.FromSeconds(60), config.LoginTimeout);
+        Assert.Equal(10, config.PrefetchConcurrency);
     }
 
     [Fact]
@@ -206,6 +225,69 @@ public class ConnectionStringParserTests
         // Assert
         Assert.NotNull(config);
         Assert.Equal(AuthenticationType.ExternalBrowser, config.Authentication.Type);
+    }
+
+    [Fact]
+    public void Parse_WithStandardConnectionCatalogAndSchema_SetsDatabaseAndSchema()
+    {
+        // The canonical ADBC connection options map to Snowflake's current database/schema
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.connection.catalog=MYDB;adbc.connection.db_schema=MYSCHEMA");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal("MYDB", config.Database);
+        Assert.Equal("MYSCHEMA", config.Schema);
+    }
+
+    [Fact]
+    public void Parse_StandardConnectionCatalog_TakesPrecedenceOverDriverAlias()
+    {
+        // adbc.connection.catalog wins over the adbc.snowflake.sql.db alias when both are present
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.snowflake.sql.db=ALIAS_DB;adbc.connection.catalog=CANONICAL_DB");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal("CANONICAL_DB", config.Database);
+    }
+
+    [Fact]
+    public void Parse_ConnectionCatalog_OverridesDatabaseDefaultSchema()
+    {
+        // A per-connection catalog/schema (via Connect) overrides the database-level default
+        var databaseDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "adbc.snowflake.sql.account", "testaccount" },
+            { "username", "testuser" },
+            { "password", "testpass" },
+            { "adbc.snowflake.sql.db", "DEFAULT_DB" },
+            { "adbc.snowflake.sql.schema", "DEFAULT_SCHEMA" },
+        };
+        var connectionParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "adbc.connection.catalog", "CONN_DB" },
+            { "adbc.connection.db_schema", "CONN_SCHEMA" },
+        };
+
+        var config = ConnectionStringParser.ParseParameters(connectionParams, databaseDefaults);
+
+        Assert.Equal("CONN_DB", config.Database);
+        Assert.Equal("CONN_SCHEMA", config.Schema);
+    }
+
+    [Fact]
+    public void Parse_WithTlsSkipVerify_SetsFlag()
+    {
+        var parameters = ParseConnectionString(
+            "adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;" +
+            "adbc.snowflake.sql.client_option.tls_skip_verify=true");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.True(config.Network.TlsSkipVerify);
     }
 
     [Fact]

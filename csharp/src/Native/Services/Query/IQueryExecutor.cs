@@ -133,6 +133,11 @@ internal class QueryRequest
     public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Gets or sets how many result-set chunks to download in parallel while streaming the result.
+    /// </summary>
+    public int PrefetchConcurrency { get; set; } = 10;
+
+    /// <summary>
     /// Gets or sets the result format (should be ArrowV1 for ADBC).
     /// </summary>
     public ResultFormat Format { get; set; } = ResultFormat.ArrowV1;

@@ -75,9 +75,22 @@ internal class ConnectionConfig
     public ConnectionPoolConfig PoolConfig { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets the query timeout.
+    /// Gets or sets the per-statement (query) timeout — Snowflake's <c>STATEMENT_TIMEOUT_IN_SECONDS</c>.
+    /// Set from <c>adbc.snowflake.sql.client_option.request_timeout</c> (gosnowflake <c>requestTimeout</c>).
     /// </summary>
     public TimeSpan QueryTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Gets or sets how long to wait for login/authentication to complete before failing, bounding the
+    /// connection-establishment round trip (gosnowflake <c>loginTimeout</c>). Defaults to 60 seconds.
+    /// </summary>
+    public TimeSpan LoginTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Gets or sets how many result-set chunks are downloaded in parallel while streaming a large
+    /// result (<c>adbc.snowflake.rpc.prefetch_concurrency</c>). Defaults to 10.
+    /// </summary>
+    public int PrefetchConcurrency { get; set; } = 10;
 
     /// <summary>
     /// Gets or sets whether to enable compression for requests.

@@ -115,6 +115,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 Warehouse = _config.Warehouse,
                 Role = _config.Role,
                 Timeout = _config.QueryTimeout,
+                PrefetchConcurrency = _config.PrefetchConcurrency,
                 RequestId = NewRequestId(),
                 AuthToken = _pooledConnection.AuthToken
             };
@@ -191,6 +192,7 @@ public sealed class SnowflakeStatement : AdbcStatement
                 Warehouse = _config.Warehouse,
                 Role = _config.Role,
                 Timeout = _config.QueryTimeout,
+                PrefetchConcurrency = _config.PrefetchConcurrency,
                 RequestId = NewRequestId(),
                 AuthToken = _pooledConnection.AuthToken
             };

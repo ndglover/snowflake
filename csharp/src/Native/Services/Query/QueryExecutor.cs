@@ -114,7 +114,7 @@ internal class QueryExecutor : IQueryExecutor
                 data.RowType != null);
 
             if (HasArrowResult(data))
-                return await CreateSuccessResultAsync(data, authToken, cancellationToken, stopwatch.Elapsed).ConfigureAwait(false);
+                return await CreateSuccessResultAsync(data, authToken, request.PrefetchConcurrency, cancellationToken, stopwatch.Elapsed).ConfigureAwait(false);
 
             // DML statements (INSERT/UPDATE/DELETE/MERGE) return a JSON summary row whose
             // columns are the affected-row counts (e.g. "number of rows inserted"), not Arrow.
@@ -228,7 +228,8 @@ internal class QueryExecutor : IQueryExecutor
 
     private async Task<QueryResult> CreateSuccessResultAsync(
         SnowflakeQueryResponse data,
-        Authentication.AuthenticationToken authToken,
+        AuthenticationToken authToken,
+        int prefetchConcurrency,
         CancellationToken cancellationToken,
         TimeSpan executionTime)
     {
@@ -239,7 +240,8 @@ internal class QueryExecutor : IQueryExecutor
             data.Chunks,
             data.ChunkHeaders,
             data.Qrmk,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            prefetchConcurrency).ConfigureAwait(false);
 
         // Apply Snowflake-specific result fixups (e.g. rescaling FIXED-with-scale integer
         // columns to Decimal128) before exposing the stream.

@@ -26,6 +26,8 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 
+using Apache.Arrow.Adbc;
+
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
 /// <summary>
@@ -88,17 +90,31 @@ internal static class ConnectionStringParser
         {
             Account = GetRequiredParameter(parameters, "adbc.snowflake.sql.account"),
             User = GetOptionalParameter(parameters, "username") ?? string.Empty,
-            Database = GetOptionalParameter(parameters, "adbc.snowflake.sql.db"),
-            Schema = GetOptionalParameter(parameters, "adbc.snowflake.sql.schema"),
+            Database = GetOptionalParameter(parameters, AdbcOptions.Connection.CurrentCatalog)
+                       ?? GetOptionalParameter(parameters, "adbc.snowflake.sql.db"),
+            Schema = GetOptionalParameter(parameters, AdbcOptions.Connection.CurrentDbSchema)
+                     ?? GetOptionalParameter(parameters, "adbc.snowflake.sql.schema"),
             Warehouse = GetOptionalParameter(parameters, "adbc.snowflake.sql.warehouse"),
             Role = GetOptionalParameter(parameters, "adbc.snowflake.sql.role"),
             Authentication = ParseAuthenticationConfig(parameters)
         };
 
-        if (parameters.TryGetValue("connection_timeout", out string? connectionTimeoutStr) &&
-            int.TryParse(connectionTimeoutStr, out int connectionTimeoutSeconds))
+        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.request_timeout", out string? requestTimeoutStr) &&
+            int.TryParse(requestTimeoutStr, out int requestTimeoutSeconds))
         {
-            config.QueryTimeout = TimeSpan.FromSeconds(connectionTimeoutSeconds);
+            config.QueryTimeout = TimeSpan.FromSeconds(requestTimeoutSeconds);
+        }
+
+        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.login_timeout", out string? loginTimeoutStr) &&
+            int.TryParse(loginTimeoutStr, out int loginTimeoutSeconds))
+        {
+            config.LoginTimeout = TimeSpan.FromSeconds(loginTimeoutSeconds);
+        }
+
+        if (parameters.TryGetValue("adbc.snowflake.rpc.prefetch_concurrency", out string? prefetchStr) &&
+            int.TryParse(prefetchStr, out int prefetch))
+        {
+            config.PrefetchConcurrency = Math.Max(1, prefetch);
         }
 
         if (parameters.TryGetValue("enable_compression", out string? compressionStr) &&
@@ -168,25 +184,25 @@ internal static class ConnectionStringParser
     {
         var poolConfig = new ConnectionPoolConfig();
 
-        if ((parameters.TryGetValue("maxpoolsize", out string? maxPoolSizeStr) || parameters.TryGetValue("max_pool_size", out maxPoolSizeStr)) &&
+        // Client-side pooling is our own feature (the ADBC Snowflake/gosnowflake driver has none), so
+        // these keys live under our own adbc.snowflake.pool.* namespace for consistency with the rest.
+        if (parameters.TryGetValue("adbc.snowflake.pool.max_size", out string? maxPoolSizeStr) &&
             int.TryParse(maxPoolSizeStr, out int maxPoolSize))
         {
             poolConfig.MaxPoolSize = maxPoolSize;
         }
 
-        if (parameters.TryGetValue("pool_idle_timeout", out string? idleTimeoutStr))
+        if (parameters.TryGetValue("adbc.snowflake.pool.idle_timeout", out string? idleTimeoutStr))
         {
             poolConfig.IdleTimeout = ParseTimeSpan(idleTimeoutStr);
         }
 
-        // waitingForIdleSessionTimeout is the Snowflake .NET connector's name for the pool-wait
-        // timeout (how long to wait for a free connection), not the idle-eviction timeout.
-        if ((parameters.TryGetValue("waitingforidlesessiontimeout", out string? acquireTimeoutStr) || parameters.TryGetValue("pool_acquire_timeout", out acquireTimeoutStr)))
+        if (parameters.TryGetValue("adbc.snowflake.pool.acquire_timeout", out string? acquireTimeoutStr))
         {
             poolConfig.AcquireTimeout = ParseTimeSpan(acquireTimeoutStr);
         }
 
-        if ((parameters.TryGetValue("expirationtimeout", out string? maxLifetimeStr) || parameters.TryGetValue("pool_max_lifetime", out maxLifetimeStr)))
+        if (parameters.TryGetValue("adbc.snowflake.pool.max_lifetime", out string? maxLifetimeStr))
         {
             poolConfig.MaxConnectionLifetime = ParseTimeSpan(maxLifetimeStr);
         }
@@ -243,17 +259,11 @@ internal static class ConnectionStringParser
         if (protocol != null)
             network.Protocol = protocol;
 
-        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.no_proxy", out string? noProxyStr) &&
-            string.Equals(noProxyStr, "true", StringComparison.OrdinalIgnoreCase))
-        {
+        if (IsTrueOption(parameters, "adbc.snowflake.sql.client_option.no_proxy"))
             network.NoProxy = true;
-        }
 
-        if (parameters.TryGetValue("adbc.snowflake.sql.ssl_skip_verify", out string? sslStr) &&
-            string.Equals(sslStr, "true", StringComparison.OrdinalIgnoreCase))
-        {
-            network.SslSkipVerify = true;
-        }
+        if (IsTrueOption(parameters, "adbc.snowflake.sql.client_option.tls_skip_verify"))
+            network.TlsSkipVerify = true;
 
         return network;
     }
@@ -272,6 +282,9 @@ internal static class ConnectionStringParser
         parameters.TryGetValue(key, out string? value);
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
+
+    private static bool IsTrueOption(IReadOnlyDictionary<string, string> parameters, string key) =>
+        parameters.TryGetValue(key, out string? value) && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateConfiguration(ConnectionConfig config)
     {

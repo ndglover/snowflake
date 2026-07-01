@@ -129,11 +129,10 @@ internal static class IntegrationTestingUtils
         {
             parameters["adbc.snowflake.sql.role"] = testConfiguration.Role;
         }
-
-        // Enable SSL skip verify if configured
-        if (testConfiguration.SslSkipVerify)
+        
+        if (testConfiguration.TlsSkipVerify)
         {
-            parameters["adbc.snowflake.sql.ssl_skip_verify"] = "true";
+            parameters["adbc.snowflake.sql.client_option.tls_skip_verify"] = "true";
         }
 
         return new SnowflakeDriver();

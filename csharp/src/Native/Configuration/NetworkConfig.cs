@@ -40,6 +40,6 @@ internal class NetworkConfig
     /// <summary>When true, explicitly disables all proxy usage (ignores system proxy settings).</summary>
     public bool NoProxy { get; set; }
 
-    /// <summary>Whether to skip SSL certificate verification.</summary>
-    public bool SslSkipVerify { get; set; }
+    /// <summary>Whether to skip TLS certificate verification.</summary>
+    public bool TlsSkipVerify { get; set; }
 }

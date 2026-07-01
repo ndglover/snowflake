@@ -224,10 +224,12 @@ internal static class ConnectionStringParser
 
         throw new ArgumentException($"Invalid timespan format: {value}. Expected format: number with optional suffix (s, m, h) or plain seconds.");
     }
-
-    private static NetworkConfig ParseNetworkConfig(IReadOnlyDictionary<string, string> parameters)
+    
+    internal static NetworkConfig ParseNetworkConfig(IReadOnlyDictionary<string, string>? parameters)
     {
         var network = new NetworkConfig();
+        if (parameters is null)
+            return network;
 
         network.Host = GetOptionalParameter(parameters, "adbc.snowflake.sql.uri.host");
 

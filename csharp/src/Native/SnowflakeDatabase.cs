@@ -56,7 +56,7 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     {
         _parameters = parameters;
         _loggerFactory = loggerFactory;
-        _httpClient = httpClient ?? CreateHttpClient(ParseNetworkFromParameters(parameters));
+        _httpClient = httpClient ?? CreateHttpClient(ConnectionStringParser.ParseNetworkConfig(parameters));
         _ownsHttpClient = httpClient == null;
 
         var loginClient = new SnowflakeLoginClient(_httpClient);
@@ -68,31 +68,6 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, ssoAuth);
         var sessionClient = new SnowflakeSessionClient(loginClient, _httpClient, _loggerFactory);
         _connectionPool = new ConnectionPoolManager(authService, sessionClient);
-    }
-
-    static NetworkConfig ParseNetworkFromParameters(IReadOnlyDictionary<string, string>? parameters)
-    {
-        var network = new NetworkConfig();
-        if (parameters == null) return network;
-
-        if (parameters.TryGetValue("adbc.snowflake.sql.uri.host", out var host) && !string.IsNullOrWhiteSpace(host))
-            network.Host = host;
-
-        if (parameters.TryGetValue("adbc.snowflake.sql.uri.port", out var portStr) && int.TryParse(portStr, out var port))
-            network.Port = port;
-
-        if (parameters.TryGetValue("adbc.snowflake.sql.uri.protocol", out var protocol) && !string.IsNullOrWhiteSpace(protocol))
-            network.Protocol = protocol;
-
-        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.no_proxy", out var noProxy) &&
-            string.Equals(noProxy, "true", StringComparison.OrdinalIgnoreCase))
-            network.NoProxy = true;
-
-        if (parameters.TryGetValue("adbc.snowflake.sql.ssl_skip_verify", out var sslStr) &&
-            string.Equals(sslStr, "true", StringComparison.OrdinalIgnoreCase))
-            network.SslSkipVerify = true;
-
-        return network;
     }
 
     static HttpClient CreateHttpClient(NetworkConfig network)

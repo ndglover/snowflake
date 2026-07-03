@@ -48,19 +48,17 @@ public sealed partial class SnowflakeConnection : AdbcConnection
 {
     private readonly ConnectionConfig _config;
     private readonly IConnectionPoolManager _connectionPool;
-    private readonly Dictionary<string, string> _options;
     private IPooledConnection? _pooledConnection;
     private readonly IQueryExecutor? _queryExecutor;
     private bool _disposed;
     private readonly ILogger<SnowflakeConnection> _logger;
 
-    private SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool, Dictionary<string, string> options,
+    private SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool,
         IPooledConnection pooledConnection, IQueryExecutor queryExecutor,
         ILogger<SnowflakeConnection> logger)
     {
         _config = config;
         _connectionPool = connectionPool;
-        _options = options;
         _pooledConnection = pooledConnection;
         _queryExecutor = queryExecutor;
         _logger = logger;
@@ -76,8 +74,6 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         loggerFactory ??= NullLoggerFactory.Instance;
         var log = loggerFactory.CreateLogger<SnowflakeConnection>();
 
-        var options = new Dictionary<string, string>();
-
         log.LogDebug("Acquiring pooled connection for user {User} account {Account}", config.User, config.Account);
         var pooledConnection = await connectionPool.AcquireConnectionAsync(config).ConfigureAwait(false);
         if (pooledConnection is null)
@@ -92,7 +88,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
 
         var queryExecutor = new QueryExecutor(apiClient, typeConverter, config.Account, config.Network, loggerFactory.CreateLogger<QueryExecutor>());
 
-        return new SnowflakeConnection(config, connectionPool, options, pooledConnection, queryExecutor, log);
+        return new SnowflakeConnection(config, connectionPool, pooledConnection, queryExecutor, log);
     }
 
     /// <summary>AdbcDatabaseAdbcDatabase
@@ -141,19 +137,6 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         return _queryExecutor.HeartbeatAsync(_pooledConnection.AuthToken, cancellationToken);
     }
 
-    /// <summary>
-    /// Sets a connection option.
-    /// </summary>
-    /// <param name="key">The option key.</param>
-    /// <param name="value">The option value.</param>
-    public override void SetOption(string key, string value)
-    {
-        ThrowIfDisposed();
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-
-        _options[key] = value ?? string.Empty;
-    }
 
     /// <summary>
     /// The table types reported by the Snowflake driver. Matches the Go driver's

@@ -31,9 +31,6 @@ internal sealed class SnowflakeQueryResponse
     [JsonPropertyName("queryId")]
     public string? QueryId { get; set; }
 
-    [JsonPropertyName("sqlState")]
-    public string? SqlState { get; set; }
-
     [JsonPropertyName("rowtype")]
     public List<RowType>? RowType { get; set; }
 
@@ -46,14 +43,8 @@ internal sealed class SnowflakeQueryResponse
     [JsonPropertyName("queryResultFormat")]
     public string? QueryResultFormat { get; set; }
 
-    [JsonPropertyName("total")]
-    public long? Total { get; set; }
-
     [JsonPropertyName("returned")]
     public long? Returned { get; set; }
-
-    [JsonPropertyName("parameters")]
-    public List<NameValueParameter>? Parameters { get; set; }
 
     [JsonPropertyName("chunks")]
     public List<ChunkInfo>? Chunks { get; set; }
@@ -99,13 +90,4 @@ internal sealed class RowType
 
     [JsonPropertyName("nullable")]
     public bool? Nullable { get; set; }
-}
-
-internal sealed class NameValueParameter
-{
-    [JsonPropertyName("name")]
-    public string? Name { get; set; }
-
-    [JsonPropertyName("value")]
-    public object? Value { get; set; }
 }

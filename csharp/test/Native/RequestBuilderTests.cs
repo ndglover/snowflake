@@ -119,25 +119,4 @@ public class RequestBuilderTests
     {
         Assert.Throws<ArgumentException>(() => RequestBuilder.BuildCancelRequest(string.Empty));
     }
-
-    [Fact]
-    public void BuildMetadataRequest_SetsTypeAndFilters()
-    {
-        SnowflakeMetadataRequestBody request = RequestBuilder.BuildMetadataRequest(
-            "tables", databasePattern: "DB", schemaPattern: "SC", tablePattern: "T",
-            columnPattern: "C", tableTypes: ["TABLE", "VIEW"]);
-
-        Assert.Equal("tables", request.Type);
-        Assert.Equal("DB", request.Database);
-        Assert.Equal("SC", request.Schema);
-        Assert.Equal("T", request.Table);
-        Assert.Equal("C", request.Column);
-        Assert.Equal(new[] { "TABLE", "VIEW" }, request.TableTypes);
-    }
-
-    [Fact]
-    public void BuildMetadataRequest_EmptyType_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => RequestBuilder.BuildMetadataRequest(string.Empty));
-    }
 }

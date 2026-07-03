@@ -76,15 +76,6 @@ internal interface IQueryExecutor
     Task HeartbeatAsync(AuthenticationToken authToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Executes a prepared statement with parameters.
-    /// </summary>
-    /// <param name="statement">The prepared statement.</param>
-    /// <param name="parameters">The parameter set.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The query result.</returns>
-    Task<QueryResult> ExecutePreparedStatementAsync(PreparedStatement statement, ParameterSet parameters, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Cancels a running query by aborting the request it was submitted with
     /// (<c>POST /queries/v1/abort-request</c>). Snowflake keys the abort on the original
     /// <paramref name="requestId"/>, not the queryId it returns, so the caller must hold the id it
@@ -136,11 +127,6 @@ internal class QueryRequest
     /// Gets or sets how many result-set chunks to download in parallel while streaming the result.
     /// </summary>
     public int PrefetchConcurrency { get; set; } = 10;
-
-    /// <summary>
-    /// Gets or sets the result format (should be ArrowV1 for ADBC).
-    /// </summary>
-    public ResultFormat Format { get; set; } = ResultFormat.ArrowV1;
 
     /// <summary>
     /// Gets or sets the positional bind variables for the statement's '?' placeholders.
@@ -204,11 +190,6 @@ internal class QueryResult
     /// Gets or sets any errors that occurred during execution.
     /// </summary>
     public List<QueryError> Errors { get; set; } = [];
-
-    /// <summary>
-    /// Gets or sets additional metadata about the query execution.
-    /// </summary>
-    public Dictionary<string, object> Metadata { get; set; } = new();
 }
 
 /// <summary>
@@ -238,36 +219,10 @@ internal class PreparedStatement
 }
 
 /// <summary>
-/// Represents a set of parameters for a prepared statement.
-/// </summary>
-internal class ParameterSet
-{
-    /// <summary>
-    /// Gets or sets the parameter values.
-    /// </summary>
-    public Dictionary<string, object> Parameters { get; set; } = new();
-
-    /// <summary>
-    /// Gets or sets the parameter batch (for batch execution).
-    /// </summary>
-    public RecordBatch? ParameterBatch { get; set; }
-}
-
-/// <summary>
 /// Represents query execution status.
 /// </summary>
 internal enum QueryStatus
 {
-    /// <summary>
-    /// Query is queued for execution.
-    /// </summary>
-    Queued,
-
-    /// <summary>
-    /// Query is currently running.
-    /// </summary>
-    Running,
-
     /// <summary>
     /// Query completed successfully.
     /// </summary>
@@ -285,22 +240,6 @@ internal enum QueryStatus
 }
 
 /// <summary>
-/// Represents the result format for queries.
-/// </summary>
-internal enum ResultFormat
-{
-    /// <summary>
-    /// Apache Arrow format version 1.
-    /// </summary>
-    ArrowV1,
-
-    /// <summary>
-    /// JSON format (not recommended for ADBC).
-    /// </summary>
-    Json
-}
-
-/// <summary>
 /// Represents a query execution error.
 /// </summary>
 internal class QueryError
@@ -314,19 +253,4 @@ internal class QueryError
     /// Gets or sets the error message.
     /// </summary>
     public string Message { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the SQL state.
-    /// </summary>
-    public string? SqlState { get; set; }
-
-    /// <summary>
-    /// Gets or sets the line number where the error occurred.
-    /// </summary>
-    public int? LineNumber { get; set; }
-
-    /// <summary>
-    /// Gets or sets the column number where the error occurred.
-    /// </summary>
-    public int? ColumnNumber { get; set; }
 }

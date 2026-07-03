@@ -456,25 +456,6 @@ internal class QueryExecutor : IQueryExecutor
     }
 
     /// <inheritdoc/>
-    public async Task<QueryResult> ExecutePreparedStatementAsync(
-        PreparedStatement statement,
-        ParameterSet parameters,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(statement);
-        ArgumentNullException.ThrowIfNull(parameters);
-
-        var request = new QueryRequest
-        {
-            Statement = statement.Statement,
-        };
-        foreach (var kvp in parameters.Parameters)
-            request.Bindings[kvp.Key] = new SnowflakeBinding(BindTypeNames.Text, kvp.Value);
-
-        return await ExecuteQueryAsync(request, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task CancelQueryAsync(string requestId, AuthenticationToken authToken, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(requestId);

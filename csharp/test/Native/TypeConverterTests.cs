@@ -149,56 +149,6 @@ public class TypeConverterTests
         Assert.Throws<ArgumentNullException>(() => _converter.ConvertSnowflakeTypeToArrow(null!));
     }
 
-    // ---- ConvertArrowTypeToSnowflake ----
-
-    [Fact]
-    public void ConvertArrowTypeToSnowflake_MapsScalarTypes()
-    {
-        Assert.Equal("BOOLEAN", _converter.ConvertArrowTypeToSnowflake(BooleanType.Default).TypeName);
-        Assert.Equal("FLOAT", _converter.ConvertArrowTypeToSnowflake(FloatType.Default).TypeName);
-        Assert.Equal("DOUBLE", _converter.ConvertArrowTypeToSnowflake(DoubleType.Default).TypeName);
-        Assert.Equal("VARCHAR", _converter.ConvertArrowTypeToSnowflake(StringType.Default).TypeName);
-        Assert.Equal("BINARY", _converter.ConvertArrowTypeToSnowflake(BinaryType.Default).TypeName);
-        Assert.Equal("DATE", _converter.ConvertArrowTypeToSnowflake(Date32Type.Default).TypeName);
-        Assert.Equal("ARRAY", _converter.ConvertArrowTypeToSnowflake(new ListType(StringType.Default)).TypeName);
-        Assert.Equal("OBJECT", _converter.ConvertArrowTypeToSnowflake(
-            new StructType([new Field("x", Int32Type.Default, true)])).TypeName);
-    }
-
-    [Fact]
-    public void ConvertArrowTypeToSnowflake_Integer_IsNumber38_0()
-    {
-        SnowflakeDataType result = _converter.ConvertArrowTypeToSnowflake(Int32Type.Default);
-        Assert.Equal("NUMBER", result.TypeName);
-        Assert.Equal(38, result.Precision);
-        Assert.Equal(0, result.Scale);
-    }
-
-    [Fact]
-    public void ConvertArrowTypeToSnowflake_Decimal_PreservesPrecisionAndScale()
-    {
-        SnowflakeDataType result = _converter.ConvertArrowTypeToSnowflake(new Decimal128Type(20, 4));
-        Assert.Equal("NUMBER", result.TypeName);
-        Assert.Equal(20, result.Precision);
-        Assert.Equal(4, result.Scale);
-    }
-
-    [Theory]
-    [InlineData(null, "TIMESTAMP_NTZ")]
-    [InlineData("UTC", "TIMESTAMP_LTZ")]
-    [InlineData("America/New_York", "TIMESTAMP_TZ")]
-    public void ConvertArrowTypeToSnowflake_Timestamp_MapsByTimezone(string? timezone, string expectedTypeName)
-    {
-        SnowflakeDataType result = _converter.ConvertArrowTypeToSnowflake(new TimestampType(TimeUnit.Nanosecond, timezone));
-        Assert.Equal(expectedTypeName, result.TypeName);
-    }
-
-    [Fact]
-    public void ConvertArrowTypeToSnowflake_Null_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => _converter.ConvertArrowTypeToSnowflake(null!));
-    }
-
     // ---- ConvertArrowBatchToParameters ----
 
     [Fact]
@@ -277,57 +227,5 @@ public class TypeConverterTests
 
         Assert.Equal(expectedType, binding.Type);
         Assert.Equal(expectedValue, binding.Value);
-    }
-
-    // ---- ConvertSnowflakeResultToArrow ----
-
-    [Fact]
-    public void ConvertSnowflakeResultToArrow_BuildsSchemaAndValues()
-    {
-        // Given a JSON result set with two typed columns and two rows (one with a null)
-        var resultSet = new SnowflakeResultSet
-        {
-            Columns =
-            [
-                new SnowflakeColumnMetadata { Name = "ID", DataType = new SnowflakeDataType { TypeName = "NUMBER", Precision = 38, Scale = 0 } },
-                new SnowflakeColumnMetadata { Name = "NAME", DataType = new SnowflakeDataType { TypeName = "VARCHAR", IsNullable = true } }
-            ],
-            Rows =
-            [
-                [1L, "a"],
-                [2L, null]
-            ]
-        };
-
-        // When it is converted to an Arrow batch
-        using RecordBatch batch = _converter.ConvertSnowflakeResultToArrow(resultSet);
-
-        // Then the schema and values match
-        Assert.Equal(2, batch.Length);
-        Assert.Equal(2, batch.ColumnCount);
-        Assert.Equal("ID", batch.Schema.FieldsList[0].Name);
-        // NUMBER(38,0) sizes to Decimal128 (precision-driven), and the value array matches.
-        Assert.IsType<Decimal128Type>(batch.Schema.FieldsList[0].DataType);
-        Assert.IsType<StringType>(batch.Schema.FieldsList[1].DataType);
-
-        var idColumn = (Decimal128Array)batch.Column(0);
-        Assert.Equal(1m, idColumn.GetValue(0));
-        Assert.Equal(2m, idColumn.GetValue(1));
-
-        var nameColumn = (StringArray)batch.Column(1);
-        Assert.Equal("a", nameColumn.GetString(0));
-        Assert.True(nameColumn.IsNull(1));
-    }
-
-    [Fact]
-    public void ConvertSnowflakeResultToArrow_NoColumns_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => _converter.ConvertSnowflakeResultToArrow(new SnowflakeResultSet()));
-    }
-
-    [Fact]
-    public void ConvertSnowflakeResultToArrow_Null_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => _converter.ConvertSnowflakeResultToArrow(null!));
     }
 }

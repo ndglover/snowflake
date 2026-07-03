@@ -16,7 +16,10 @@ _None outstanding._
 ## Tier 3 — Hygiene / decisions
 
 - [ ] **SsoAuthenticator hardcodes port 8080** — no fallback if in use; use an OS-assigned port or try several.
-- [ ] **No consumer logging path** — `ILogger` is used internally but there's no easy way for a consumer to plug in logging (hit this with the session harness). Needed for prod diagnostics.
+- [ ] **Observability — two separate concerns (deferred, decide approach later):**
+  - **Logging (diagnostic messages, `ILogger`):** used internally, injected via the `SnowflakeDatabase` ctor `ILoggerFactory`. Works for consumers that construct the database directly, but **not** through the ADBC-standard `AdbcDriver.Open(IReadOnlyDictionary<string,string>)` — a factory is an object and can't ride a string dict. To formalize: thread the factory to the components that lack one (pool, `RestApiClient`) and document how to pass it.
+  - **Telemetry (tracing/spans):** the ADBC C# standard is OpenTelemetry via `System.Diagnostics.ActivitySource` (`Apache.Arrow.Adbc.Tracing`: `TracingConnection`/`TracingStatement`/`IActivityTracer`, `…trace_parent` option). Listeners attach out-of-band, so this fits the string-dict `Open` that `ILogger` can't. Emit spans around connect/execute/fetch/renew.
+  - (connector-net's file-based "easy logging" — `sf_client_config.json` `log_level`/`log_path` via `client_config_file` — is a third, Snowflake-ecosystem option; likely skip unless parity is wanted.)
 - [ ] **Pool statistics are computed but never surfaced** — `ConnectionPoolManager.GetStatisticsAsync`/`PoolStatistics` and the counters behind them (`_totalConnectionsCreated/Closed/Reuses`, `PendingRequests`) are maintained everywhere but have no caller (a conventional pool-metrics surface carried over, not wired up). Review alongside the logging/observability work: either expose them (metrics/`ILogger`/an ADBC option) or remove the DTO + counters as dead weight.
 
 ## Scope decisions (confirm whether in scope for v1)

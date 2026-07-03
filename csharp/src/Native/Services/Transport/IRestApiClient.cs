@@ -63,17 +63,4 @@ internal interface IRestApiClient
         Dictionary<string, string>? chunkHeaders = null,
         string? qrmk = null,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Sends a GET request to the specified endpoint.
-    /// </summary>
-    /// <typeparam name="T">The response type.</typeparam>
-    /// <param name="endpoint">The API endpoint.</param>
-    /// <param name="token">The authentication token.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The API response.</returns>
-    Task<ApiResponse<T>> GetAsync<T>(
-        string endpoint,
-        AuthenticationToken token,
-        CancellationToken cancellationToken = default);
 }

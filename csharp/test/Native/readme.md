@@ -28,7 +28,7 @@ that need a live account under `Integration/` and tag them `Category=Integration
 | File | Tests | What it covers |
 |------|-------|----------------|
 | `TypeConverterTests.cs` | ~41 | Snowflake ⇄ Arrow type mapping (describe path): NUMBER sized by precision (scale 0 → Int32 ≤9 / Int64 ≤18 / else Decimal128; scale>0 → Decimal128) to match the result decoder, BOOLEAN/VARCHAR/BINARY/DATE/TIME, TIMESTAMP NTZ/LTZ/TZ (TZ tagged UTC), and unsupported-type → `NotSupportedException`. |
-| `RequestBuilderTests.cs` | ~10 | REST request-body construction — `BuildQueryRequest` (sqlText, ARROW result format, session parameters, bindings, multi-statement, `describeOnly`), `BuildCancelRequest`, `BuildMetadataRequest`, and argument validation. |
+| `RequestBuilderTests.cs` | ~8 | REST request-body construction — `BuildQueryRequest` (sqlText, ARROW result format, session parameters, bindings, multi-statement, `describeOnly`), `BuildCancelRequest`, and argument validation. |
 | `SnowflakeAccountUrlTests.cs` | ~8 | Account → base-URL building: plain account vs. full hostname (no double-append, case-insensitive), and `NetworkConfig` host/port/protocol overrides. |
 | `QueryExecutorTests.cs` | ~5 | DML affected-row detection (`TryGetDmlAffectedRows`): INSERT count, MERGE summing across count columns, reads the row-count summary (not the payload `Returned`), non-DML / empty → false. |
 | `Configuration/ConnectionStringParserTests.cs` | ~12 | Connection-string / parameter parsing and required-parameter / invalid-authenticator validation. |

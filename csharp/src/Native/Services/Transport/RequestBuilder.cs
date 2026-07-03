@@ -103,35 +103,4 @@ internal static class RequestBuilder
             : new SnowflakeCancelRequestBody { RequestId = requestId };
     }
 
-    /// <summary>
-    /// Builds a metadata request.
-    /// </summary>
-    /// <param name="metadataType">The type of metadata to retrieve.</param>
-    /// <param name="databasePattern">The database pattern filter (optional).</param>
-    /// <param name="schemaPattern">The schema pattern filter (optional).</param>
-    /// <param name="tablePattern">The table pattern filter (optional).</param>
-    /// <param name="columnPattern">The column pattern filter (optional).</param>
-    /// <param name="tableTypes">The table types filter (optional).</param>
-    /// <returns>A metadata request body.</returns>
-    public static SnowflakeMetadataRequestBody BuildMetadataRequest(
-        string metadataType,
-        string? databasePattern = null,
-        string? schemaPattern = null,
-        string? tablePattern = null,
-        string? columnPattern = null,
-        string[]? tableTypes = null)
-    {
-        if (string.IsNullOrEmpty(metadataType))
-            throw new ArgumentException("Metadata type cannot be null or empty.", nameof(metadataType));
-
-        return new SnowflakeMetadataRequestBody
-        {
-            Type = metadataType,
-            Database = string.IsNullOrEmpty(databasePattern) ? null : databasePattern,
-            Schema = string.IsNullOrEmpty(schemaPattern) ? null : schemaPattern,
-            Table = string.IsNullOrEmpty(tablePattern) ? null : tablePattern,
-            Column = string.IsNullOrEmpty(columnPattern) ? null : columnPattern,
-            TableTypes = tableTypes is { Length: > 0 } ? tableTypes : null,
-        };
-    }
 }

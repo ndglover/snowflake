@@ -40,20 +40,6 @@ internal interface ITypeConverter
     IArrowType ConvertSnowflakeTypeToArrow(SnowflakeDataType snowflakeType);
 
     /// <summary>
-    /// Converts an Arrow type to a Snowflake data type.
-    /// </summary>
-    /// <param name="arrowType">The Arrow type.</param>
-    /// <returns>The corresponding Snowflake data type.</returns>
-    SnowflakeDataType ConvertArrowTypeToSnowflake(IArrowType arrowType);
-
-    /// <summary>
-    /// Converts a Snowflake result set to Arrow record batches.
-    /// </summary>
-    /// <param name="resultSet">The Snowflake result set.</param>
-    /// <returns>A record batch containing the converted data.</returns>
-    RecordBatch ConvertSnowflakeResultToArrow(SnowflakeResultSet resultSet);
-
-    /// <summary>
     /// Converts an Arrow record batch to Snowflake parameter bindings.
     /// </summary>
     /// <param name="batch">The Arrow record batch.</param>

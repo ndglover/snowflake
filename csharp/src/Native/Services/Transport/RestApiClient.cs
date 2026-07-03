@@ -132,27 +132,6 @@ internal class RestApiClient : IRestApiClient
         }, cancellationToken);
     }
 
-    /// <inheritdoc/>
-    public async Task<ApiResponse<T>> GetAsync<T>(
-        string endpoint,
-        AuthenticationToken token,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint, nameof(endpoint));
-        ArgumentNullException.ThrowIfNull(token, nameof(token));
-
-        return await ExecuteWithRetryAsync(async () =>
-        {
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, endpoint);
-            ConfigureRequest(requestMessage, token);
-
-            var response = await _httpClient.SendAsync(requestMessage, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            return await ReadApiResponseAsync<T>(response, cancellationToken);
-        }, cancellationToken);
-    }
-
     private void AddCompressionHeadersIfEnabled(HttpRequestMessage request)
     {
         if (!_enableCompression) return;

@@ -101,32 +101,3 @@ internal sealed class SnowflakeRenewSessionData
     [JsonPropertyName("validityInSecondsMT")]
     public int MasterValidityInSeconds { get; init; }
 }
-
-/// <summary>
-/// Request body for a metadata listing request.
-/// </summary>
-internal sealed class SnowflakeMetadataRequestBody
-{
-    [JsonPropertyName("type")]
-    public required string Type { get; init; }
-
-    [JsonPropertyName("database")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Database { get; init; }
-
-    [JsonPropertyName("schema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Schema { get; init; }
-
-    [JsonPropertyName("table")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Table { get; init; }
-
-    [JsonPropertyName("column")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Column { get; init; }
-
-    [JsonPropertyName("tableTypes")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string[]? TableTypes { get; init; }
-}

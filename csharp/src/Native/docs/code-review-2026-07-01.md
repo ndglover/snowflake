@@ -62,7 +62,12 @@ a 100M-row result: gigabytes).
 chunks are then bounded by ~`prefetchConcurrency` (in-flight) + channel capacity ≈ 2× concurrency,
 which is the intended design. This is a correctness-of-design fix, not a tuning knob.
 
-### M2 (High) — `ReadApiResponseAsync` materializes the whole JSON response as a string
+### M2 (High) — ✅ FIXED 2026-07-01 — `ReadApiResponseAsync` materialized the whole JSON response as a string
+Now `JsonSerializer.DeserializeAsync` straight off the decompressed response stream, with
+`PostAsync` switched to `HttpCompletionOption.ResponseHeadersRead` so HttpClient doesn't pre-buffer
+the body either (without that, stream deserialization would still read from a full in-memory copy).
+H1 (response disposal) applied in the same change — required by `ResponseHeadersRead`. Verified:
+136 unit + 23 live tests green, benchmark unchanged. Original finding below.
 `RestApiClient.cs:176–185` reads the (decompressed) response into a `string` via `StreamReader`,
 then `JsonSerializer.Deserialize`s the string. The first query response carries `rowSetBase64` —
 often **megabytes** — so the payload exists simultaneously as: UTF-8 bytes → **UTF-16 string
@@ -145,7 +150,7 @@ filters and group client-side — this is how the Go driver keeps it flat. Flagg
 
 | # | Item | Where |
 |---|------|-------|
-| H1 | **`HttpResponseMessage` never disposed** on the JSON paths (`PostAsync`/`GetAsync`) — the content stream is disposed, the message isn't. Wrap in `using`. (`GetArrowStreamAsync` correctly can't dispose — it hands the live stream out.) | `RestApiClient.cs:85,149` |
+| H1 | ✅ FIXED with M2 — **`HttpResponseMessage` never disposed** on the JSON path; now `using`-scoped in `PostAsync` (and `GetArrowStreamAsync`'s intentional non-disposal is documented at the call site). `ConfigureAwait(false)` also added throughout the file, and `DelayAsync` got its missing `private`. | `RestApiClient.cs` |
 | H2 | **Hardcoded client identity**: `UserAgent` claims `.NET/1.0.0 (Windows) .NETCoreApp/8.0` regardless of OS/runtime/driver version, and the login sends `CLIENT_APP_VERSION = "3.1.0"`. Derive from assembly version + `RuntimeInformation` (keeping the `.NET/{ver}` shape the server requires for Arrow). | `RestApiClient.cs:194–197`, `SnowflakeLoginClient.cs:72–73` |
 | H3 | **Exception fidelity**: `ExecuteQueryAsync`'s catch-all flattens to `ex.Message` in a `QueryError`, and `SnowflakeStatement` re-throws `AdbcException` built from that string — the original exception (stack, inner) is lost. Carry the exception into the error/`AdbcException` as `InnerException`. | `QueryExecutor.cs:139–156`, `SnowflakeStatement.cs` |
 | H4 | **`TypeConverter` is stateless but instantiated 3×** (connection, statement, session-client heartbeat). Add `TypeConverter.Shared` and use it. Trivial. | `SnowflakeConnection.cs:90`, `SnowflakeStatement.cs:68`, `SnowflakeSessionClient.cs:62` |

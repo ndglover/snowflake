@@ -81,11 +81,12 @@ internal class RestApiClient : IRestApiClient
 
             requestMessage.Content = JsonContent.Create(request);
             AddCompressionHeadersIfEnabled(requestMessage);
-
-            var response = await _httpClient.SendAsync(requestMessage, cancellationToken);
+            
+            using var response = await _httpClient.SendAsync(
+                requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            return await ReadApiResponseAsync<TResponse>(response, cancellationToken);
+            return await ReadApiResponseAsync<TResponse>(response, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
     }
 
@@ -125,10 +126,13 @@ internal class RestApiClient : IRestApiClient
 
             requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.apache.arrow.stream"));
 
-            var response = await _httpClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var response = await _httpClient.SendAsync(
+                requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            return await GetResponseStreamAsync(response, cancellationToken);
+            // The response is deliberately not disposed: the caller owns the returned live body
+            // stream, and disposing the stream releases the connection.
+            return await GetResponseStreamAsync(response, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
     }
 
@@ -142,7 +146,7 @@ internal class RestApiClient : IRestApiClient
 
     private async Task<Stream> GetResponseStreamAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         if (response.Content.Headers.ContentEncoding.Contains("gzip"))
             return new GZipStream(stream, CompressionMode.Decompress);
 
@@ -154,13 +158,9 @@ internal class RestApiClient : IRestApiClient
 
     private async Task<ApiResponse<T>> ReadApiResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        using var stream = await GetResponseStreamAsync(response, cancellationToken);
-        using var reader = new StreamReader(stream);
-        var json = await reader.ReadToEndAsync(cancellationToken);
-        var result = JsonSerializer.Deserialize<ApiResponse<T>>(json)
+        await using var stream = await GetResponseStreamAsync(response, cancellationToken).ConfigureAwait(false);
+        return await JsonSerializer.DeserializeAsync<ApiResponse<T>>(stream, cancellationToken: cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Failed to deserialize API response.");
-
-        return result;
     }
 
     private void ConfigureRequest(HttpRequestMessage request, AuthenticationToken token)
@@ -186,29 +186,29 @@ internal class RestApiClient : IRestApiClient
         {
             try
             {
-                return await operation();
+                return await operation().ConfigureAwait(false);
             }
             catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < _maxRetries - 1)
             {
                 lastException = ex;
-                await DelayAsync(attempt, cancellationToken);
+                await DelayAsync(attempt, cancellationToken).ConfigureAwait(false);
             }
             catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException && attempt < _maxRetries - 1)
             {
                 lastException = ex;
-                await DelayAsync(attempt, cancellationToken);
+                await DelayAsync(attempt, cancellationToken).ConfigureAwait(false);
             }
         }
 
         throw lastException ?? new InvalidOperationException("Operation failed after retries.");
     }
 
-    async Task DelayAsync(int attempt, CancellationToken cancellationToken)
+    private async Task DelayAsync(int attempt, CancellationToken cancellationToken)
     {
         var delay = TimeSpan.FromMilliseconds(
             _baseRetryDelay.TotalMilliseconds * Math.Pow(2, attempt) +
             Random.Shared.Next(0, 100));
-        await Task.Delay(delay, cancellationToken);
+        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
     }
 
     private static bool IsTransientError(HttpRequestException ex)

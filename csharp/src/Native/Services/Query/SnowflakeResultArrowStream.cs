@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -228,30 +229,22 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
 
     private static Int32Array ToInt32(IArrowArray source)
     {
-        var builder = new Int32Array.Builder();
-        for (int i = 0; i < source.Length; i++)
+        (ArrowBuffer values, ArrowBuffer validity, int nullCount) = source switch
         {
-            if (source.IsNull(i))
-                builder.AppendNull();
-            else
-                builder.Append(checked((int)ReadInteger(source, i)));
-        }
+            Int8Array a => NarrowToInt32(a.Values, a),
+            Int16Array a => NarrowToInt32(a.Values, a),
+            Int32Array a => NarrowToInt32(a.Values, a),
+            Int64Array a => NarrowToInt32(a.Values, a),
+            _ => throw UnexpectedIntegerArray(source)
+        };
 
-        return builder.Build();
+        return new Int32Array(values, validity, source.Length, nullCount, 0);
     }
 
     private static Int64Array ToInt64(IArrowArray source)
     {
-        var builder = new Int64Array.Builder();
-        for (int i = 0; i < source.Length; i++)
-        {
-            if (source.IsNull(i))
-                builder.AppendNull();
-            else
-                builder.Append(ReadInteger(source, i));
-        }
-
-        return builder.Build();
+        (ArrowBuffer values, ArrowBuffer validity, int nullCount) = ScaleToLong(source, multiplier: 1);
+        return new Int64Array(values, validity, source.Length, nullCount, 0);
     }
 
     private static Decimal128Array RescaleToDecimal(IArrowArray source, Decimal128Type type, int scale)
@@ -261,31 +254,49 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
             scaleFactor *= 10m;
 
         var builder = new Decimal128Array.Builder(type);
-        for (int i = 0; i < source.Length; i++)
+        builder.Reserve(source.Length);
+        switch (source)
         {
-            if (source.IsNull(i))
-                builder.AppendNull();
-            else
-                builder.Append(scale > 0 ? ReadInteger(source, i) / scaleFactor : ReadInteger(source, i));
+            case Int8Array a: AppendRescaled(a.Values, a, builder, scale, scaleFactor); break;
+            case Int16Array a: AppendRescaled(a.Values, a, builder, scale, scaleFactor); break;
+            case Int32Array a: AppendRescaled(a.Values, a, builder, scale, scaleFactor); break;
+            case Int64Array a: AppendRescaled(a.Values, a, builder, scale, scaleFactor); break;
+            default: throw UnexpectedIntegerArray(source);
         }
 
         return builder.Build();
     }
 
+    private static void AppendRescaled<T>(
+        ReadOnlySpan<T> src, Apache.Arrow.Array array, Decimal128Array.Builder builder, int scale, decimal scaleFactor)
+        where T : struct, INumber<T>
+    {
+        for (int i = 0; i < src.Length; i++)
+        {
+            if (array.IsNull(i))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                decimal value = decimal.CreateChecked(src[i]);
+                builder.Append(scale > 0 ? value / scaleFactor : value);
+            }
+        }
+    }
+
     private static Time64Array ConvertTime(IArrowArray source, Time64Type type, int scale)
     {
-        long multiplier = PowerOfTen(9 - scale);
-        (ArrowBuffer values, ArrowBuffer validity, int nullCount) =
-            BuildLongColumn(source.Length, source.IsNull, i => ReadInteger(source, i) * multiplier);
+        (ArrowBuffer values, ArrowBuffer validity, int nullCount) = ScaleToLong(source, PowerOfTen(9 - scale));
         return new Time64Array(type, values, validity, source.Length, nullCount, 0);
     }
 
     private static TimestampArray ConvertTimestamp(IArrowArray source, TimestampType type, int scale, bool hasTimezoneField)
     {
         long multiplier = PowerOfTen(9 - scale);
-
-        Func<int, bool> isNull;
-        Func<int, long> nanoseconds;
+        ArrowBuffer values;
+        ArrowBuffer validity;
+        int nullCount;
 
         if (source is StructArray structArray)
         {
@@ -296,49 +307,111 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
             // shape is determined by the known logical type + field count, never by field names.
             var epoch = (Int64Array)structArray.Fields[0];
             bool hasFraction = !hasTimezoneField || structArray.Fields.Count >= 3;
-            Int32Array? fraction = hasFraction ? (Int32Array)structArray.Fields[1] : null;
 
-            isNull = structArray.IsNull;
-            nanoseconds = fraction != null
-                ? i => epoch.Values[i] * NanosecondsPerSecond + (long)fraction.Values[i] * multiplier
-                : i => epoch.Values[i] * multiplier;
+            ReadOnlySpan<long> epochValues = epoch.Values;
+            var builder = new ArrowBuffer.Builder<long>(structArray.Length);
+            if (hasFraction)
+            {
+                ReadOnlySpan<int> fractionValues = ((Int32Array)structArray.Fields[1]).Values;
+                for (int i = 0; i < epochValues.Length; i++)
+                    builder.Append(unchecked(epochValues[i] * NanosecondsPerSecond + fractionValues[i] * multiplier));
+            }
+            else
+            {
+                for (int i = 0; i < epochValues.Length; i++)
+                    builder.Append(unchecked(epochValues[i] * multiplier));
+            }
+
+            // Null slots computed garbage above (harmless unchecked arithmetic); the validity
+            // bitmap is what marks them null.
+            values = builder.Build();
+            (validity, nullCount) = CloneValidity(structArray);
         }
         else
         {
             // single integer: the whole timestamp in 10^-scale units.
-            isNull = source.IsNull;
-            nanoseconds = i => ReadInteger(source, i) * multiplier;
+            (values, validity, nullCount) = ScaleToLong(source, multiplier);
         }
 
-        (ArrowBuffer values, ArrowBuffer validity, int nullCount) =
-            BuildLongColumn(source.Length, isNull, nanoseconds);
         return new TimestampArray(type, values, validity, source.Length, nullCount, 0);
     }
 
-    private static (ArrowBuffer Values, ArrowBuffer Validity, int NullCount) BuildLongColumn(
-        int length, Func<int, bool> isNull, Func<int, long> value)
+    /// <summary>
+    /// Rescales every integer slot into a long buffer (value × multiplier), dispatching on the
+    /// concrete array type once per column instead of per row. Null slots produce garbage values
+    /// (the widening read never throws and the multiply is unchecked); the validity bitmap is what
+    /// marks them null.
+    /// </summary>
+    private static (ArrowBuffer Values, ArrowBuffer Validity, int NullCount) ScaleToLong(IArrowArray source, long multiplier) => source switch
     {
-        var values = new ArrowBuffer.Builder<long>(length);
-        var validity = new ArrowBuffer.BitmapBuilder(length);
-        int nullCount = 0;
+        Int8Array a => ScaleCore(a.Values, a, multiplier),
+        Int16Array a => ScaleCore(a.Values, a, multiplier),
+        Int32Array a => ScaleCore(a.Values, a, multiplier),
+        Int64Array a => ScaleCore(a.Values, a, multiplier),
+        _ => throw UnexpectedIntegerArray(source)
+    };
 
-        for (int i = 0; i < length; i++)
+    private static (ArrowBuffer, ArrowBuffer, int) ScaleCore<T>(ReadOnlySpan<T> src, Apache.Arrow.Array array, long multiplier)
+        where T : struct, INumber<T>
+    {
+        var values = new ArrowBuffer.Builder<long>(src.Length);
+        for (int i = 0; i < src.Length; i++)
+            values.Append(unchecked(long.CreateChecked(src[i]) * multiplier));
+
+        (ArrowBuffer validity, int nullCount) = CloneValidity(array);
+        return (values.Build(), validity, nullCount);
+    }
+
+    private static (ArrowBuffer, ArrowBuffer, int) NarrowToInt32<T>(ReadOnlySpan<T> src, Apache.Arrow.Array array)
+        where T : struct, INumber<T>
+    {
+        // checked narrowing: a FIXED(precision ≤ 9) value always fits an Int32, so an overflow
+        // here means corrupt data and should throw (same semantics as the old per-row cast). Null
+        // slots are skipped rather than computed, since their garbage could spuriously overflow.
+        var values = new ArrowBuffer.Builder<int>(src.Length);
+        if (array.NullCount == 0)
         {
-            if (isNull(i))
+            for (int i = 0; i < src.Length; i++)
+                values.Append(int.CreateChecked(src[i]));
+            return (values.Build(), ArrowBuffer.Empty, 0);
+        }
+
+        var validity = new ArrowBuffer.BitmapBuilder(src.Length);
+        for (int i = 0; i < src.Length; i++)
+        {
+            if (array.IsNull(i))
             {
-                values.Append(0L);
+                values.Append(0);
                 validity.Append(false);
-                nullCount++;
             }
             else
             {
-                values.Append(value(i));
+                values.Append(int.CreateChecked(src[i]));
                 validity.Append(true);
             }
         }
 
-        return (values.Build(), validity.Build(), nullCount);
+        return (values.Build(), validity.Build(), array.NullCount);
     }
+
+    /// <summary>
+    /// Reproduces the source array's validity as a fresh bitmap (the source's own buffer cannot be
+    /// shared, because the source array is disposed after conversion). All-valid columns skip the
+    /// bitmap entirely — Arrow treats an empty validity buffer as "no nulls".
+    /// </summary>
+    private static (ArrowBuffer Validity, int NullCount) CloneValidity(Apache.Arrow.Array array)
+    {
+        if (array.NullCount == 0)
+            return (ArrowBuffer.Empty, 0);
+
+        var validity = new ArrowBuffer.BitmapBuilder(array.Length);
+        for (int i = 0; i < array.Length; i++)
+            validity.Append(array.IsValid(i));
+        return (validity.Build(), array.NullCount);
+    }
+
+    private static NotSupportedException UnexpectedIntegerArray(IArrowArray array) =>
+        new($"Unexpected array type {array.GetType().Name} for an integer column.");
 
     private static long PowerOfTen(int exponent)
     {
@@ -350,15 +423,6 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
 
     private static bool IsIntegerType(IArrowType type) =>
         type is Int8Type or Int16Type or Int32Type or Int64Type;
-
-    private static long ReadInteger(IArrowArray array, int index) => array switch
-    {
-        Int8Array a => a.GetValue(index)!.Value,
-        Int16Array a => a.GetValue(index)!.Value,
-        Int32Array a => a.GetValue(index)!.Value,
-        Int64Array a => a.GetValue(index)!.Value,
-        _ => throw new NotSupportedException($"Unexpected array type {array.GetType().Name} for an integer column.")
-    };
 
     private readonly record struct ColumnTransform(int Index, Func<IArrowArray, IArrowArray> Convert);
 }

@@ -107,7 +107,7 @@ further with `ArrayPool`-backed buffers (e.g. `RecyclableMemoryStream`) so chunk
 reused across the stream instead of allocated/collected per chunk — worthwhile because at
 ~16 MB/chunk these are all LOH objects.
 
-### M4 (Low) — Decode builders not pre-sized
+### M4 (Low) — ✅ FIXED with C1 — decode builders not pre-sized
 `SnowflakeResultArrowStream.ToInt32`/`ToInt64`/`RescaleToDecimal` (`:229–273`) use default-capacity
 builders that grow by doubling, even though `source.Length` is known. (`BuildLongColumn` already
 pre-sizes — these three predate it.) Pass the length to the builder/`Reserve`.
@@ -120,7 +120,20 @@ for successes; `Metadata` is dead (D8). Make `Errors` lazily allocated or assign
 
 ## 3. Performance — CPU
 
-### C1 (Medium-High) — Per-row dynamic dispatch in the FIXED/TIME/TIMESTAMP decode loops
+### C1 (Medium-High) — ✅ FIXED 2026-07-01 (with M4) — per-row dynamic dispatch in the decode loops
+Rewritten as proposed: one concrete-type dispatch **per column** (generic-math cores over
+`ReadOnlySpan<T>`, JIT-specialized per width) replacing the per-row `ReadInteger` switch and
+`Nullable<T>` round-trips; the per-row delegates in `BuildLongColumn` are gone (the helper itself
+deleted); buffers pre-sized (M4, incl. `Decimal128Array.Builder.Reserve`); and all-valid columns
+skip validity building entirely (`ArrowBuffer.Empty`), with null-ful columns cloning the bitmap
+once via `CloneValidity`. Long-producing paths compute null slots branch-free (unchecked garbage,
+masked by validity); the checked Int32 narrowing skips null slots so garbage can't spuriously
+overflow. **New offline coverage** (`SnowflakeResultArrowStreamTests`, 7 tests): this layer
+previously had live-only coverage — now value math + null handling for FIXED widen/rescale, TIME,
+struct and single-int TIMESTAMP, and pass-through are pinned deterministically. Verified: 146 unit
++ 27 live `TypeDecodingTests` green. Benchmark: interleaved Native-vs-Interop control showed the
+same ~5% relationship as before the change (environment drift dominates wall-clock; the decode CPU
+delta is below network noise). Original finding below.
 The column transforms run per row, per batch, on the hottest data path:
 - `ReadInteger` (`SnowflakeResultArrowStream.cs:354`) does a **type-pattern-match per row** plus a
   `Nullable<T>` round-trip (`GetValue(i)!.Value`) — the source array type can't change mid-column,

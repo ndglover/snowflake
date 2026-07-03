@@ -27,8 +27,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
 /// <summary>
@@ -122,18 +120,5 @@ internal class AuthenticationService : IAuthenticationService
             throw new ArgumentException("User is required for SSO authentication.", nameof(user));
 
         return await _ssoAuth.AuthenticateAsync(account, user, authConfig.SsoProperties, cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task<AuthenticationToken> RefreshTokenAsync(
-        AuthenticationToken token,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(token);
-
-        if (!token.CanRefresh)
-            throw new AdbcException("Token cannot be refreshed. No refresh token available.");
-
-        return await _oauthAuth.RefreshTokenAsync(token.RefreshToken!, cancellationToken);
     }
 }

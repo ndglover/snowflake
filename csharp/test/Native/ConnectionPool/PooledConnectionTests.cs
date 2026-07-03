@@ -34,14 +34,17 @@ namespace AdbcDrivers.Snowflake.Native.Tests.ConnectionPool;
 public class PooledConnectionTests
 {
     [Fact]
-    public void IsTokenExpired_IsEvaluatedAgainstTheInjectedClock()
+    public void IsTokenExpired_IsKeyedOnMasterExpiry_AgainstTheInjectedClock()
     {
-        // Given a connection whose token expires an hour after the (fake) creation time
+        // Given a connection whose session token expires in 1h but the master (recoverability
+        // ceiling) expires in 4h — eviction should track the master, since a session-expired
+        // connection is still usable via renewal until the master lapses.
         var fakeTime = new FakeTimeProvider();
         var token = new AuthenticationToken
         {
             SessionToken = "session",
             ExpiresAt = fakeTime.GetUtcNow().AddHours(1),
+            MasterExpiresAt = fakeTime.GetUtcNow().AddHours(4),
         };
         var connection = new PooledConnection(
             "id",
@@ -50,13 +53,13 @@ public class PooledConnectionTests
             sessionLifecycle: null,
             timeProvider: fakeTime);
 
-        // Then it is valid now, still valid just before expiry, and expired once the clock passes it
+        // Then it stays valid past the session expiry, and only flips once the master lapses
         Assert.False(connection.IsTokenExpired);
 
-        fakeTime.Advance(TimeSpan.FromMinutes(59));
+        fakeTime.Advance(TimeSpan.FromHours(2)); // session (1h) is long gone, master (4h) still alive
         Assert.False(connection.IsTokenExpired);
 
-        fakeTime.Advance(TimeSpan.FromMinutes(2));
+        fakeTime.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1)); // now past the 4h master
         Assert.True(connection.IsTokenExpired);
     }
 }

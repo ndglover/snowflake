@@ -36,14 +36,18 @@ internal class AuthenticationToken
     public string AccessToken { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the refresh token (if available).
-    /// </summary>
-    public string? RefreshToken { get; set; }
-
-    /// <summary>
-    /// Gets or sets the token expiration time.
+    /// Gets or sets when the <b>session</b> token expires (~1h). Once past, a query gets GS
+    /// <c>390112</c> and the session is renewed from the master token; so this is informational,
+    /// not a hard wall.
     /// </summary>
     public DateTimeOffset ExpiresAt { get; set; }
+
+    /// <summary>
+    /// Gets or sets when the <b>master</b> token expires (~4h) — the point past which the connection
+    /// is beyond recovery (renewal itself fails, GS <c>390114</c>). This is what pool eviction keys on:
+    /// a session-expired-but-master-alive connection is still usable via renewal.
+    /// </summary>
+    public DateTimeOffset MasterExpiresAt { get; set; }
 
     /// <summary>
     /// Gets or sets the token type (typically "Bearer").
@@ -64,9 +68,4 @@ internal class AuthenticationToken
     /// Gets or sets the session ID.
     /// </summary>
     public string? SessionId { get; set; }
-
-    /// <summary>
-    /// Gets a value indicating whether the token can be refreshed.
-    /// </summary>
-    public bool CanRefresh => !string.IsNullOrEmpty(RefreshToken);
 }

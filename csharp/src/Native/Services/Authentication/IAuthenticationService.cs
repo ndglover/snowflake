@@ -42,12 +42,4 @@ internal interface IAuthenticationService
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(string account, string user, AuthenticationConfig authConfig, ConnectionConfig? connectionConfig = null, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Refreshes an existing authentication token.
-    /// </summary>
-    /// <param name="token">The token to refresh.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A refreshed authentication token.</returns>
-    Task<AuthenticationToken> RefreshTokenAsync(AuthenticationToken token, CancellationToken cancellationToken = default);
 }

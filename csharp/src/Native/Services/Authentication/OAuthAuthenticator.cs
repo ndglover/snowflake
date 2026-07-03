@@ -22,35 +22,27 @@
 */
 
 using System;
-using System.Net.Http;
-using System.Net.Http.Json;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 
-using Apache.Arrow.Adbc;
-
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
 /// <summary>
-/// Implements OAuth 2.0 authentication for Snowflake.
+/// Implements OAuth 2.0 authentication for Snowflake: exchanges a caller-supplied OAuth token for a
+/// Snowflake session by logging in with authenticator=OAUTH.
 /// </summary>
 internal class OAuthAuthenticator : IOAuthAuthenticator
 {
     private readonly SnowflakeLoginClient _loginClient;
-    private readonly HttpClient _httpClient;
-    private const string TokenEndpoint = "/oauth/token-request";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OAuthAuthenticator"/> class.
     /// </summary>
     /// <param name="loginClient">The shared login client.</param>
-    /// <param name="httpClient">The HTTP client for token refresh requests.</param>
-    public OAuthAuthenticator(SnowflakeLoginClient loginClient, HttpClient httpClient)
+    public OAuthAuthenticator(SnowflakeLoginClient loginClient)
     {
         _loginClient = loginClient ?? throw new ArgumentNullException(nameof(loginClient));
-        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
     }
 
     /// <inheritdoc/>
@@ -75,55 +67,5 @@ internal class OAuthAuthenticator : IOAuthAuthenticator
         var result = await _loginClient.LoginAsync(account, authData, config, cancellationToken);
         result.TokenType = "Bearer";
         return result;
-    }
-
-    /// <inheritdoc/>
-    public async Task<AuthenticationToken> RefreshTokenAsync(
-        string refreshToken,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrEmpty(refreshToken))
-            throw new ArgumentException("Refresh token cannot be null or empty.", nameof(refreshToken));
-
-        var tokenRequest = new
-        {
-            grant_type = "refresh_token",
-            refresh_token = refreshToken
-        };
-
-        try
-        {
-            var response = await _httpClient.PostAsJsonAsync(TokenEndpoint, tokenRequest, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var responseContent = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken);
-
-            if (responseContent == null)
-                throw new AdbcException("Invalid response from OAuth token refresh.");
-
-            return new AuthenticationToken
-            {
-                AccessToken = responseContent.AccessToken ?? throw new AdbcException("No access token received."),
-                RefreshToken = responseContent.RefreshToken ?? refreshToken,
-                ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.ExpiresIn),
-                TokenType = responseContent.TokenType ?? "Bearer"
-            };
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new AdbcException($"Failed to refresh OAuth token: {ex.Message}", ex);
-        }
-        catch (JsonException ex)
-        {
-            throw new AdbcException($"Failed to parse OAuth token refresh response: {ex.Message}", ex);
-        }
-    }
-
-    private class TokenResponse
-    {
-        public string? AccessToken { get; set; }
-        public string? RefreshToken { get; set; }
-        public string? TokenType { get; set; }
-        public int ExpiresIn { get; set; } = 3600;
     }
 }

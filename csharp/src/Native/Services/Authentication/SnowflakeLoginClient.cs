@@ -103,8 +103,8 @@ internal class SnowflakeLoginClient
                 SessionToken = responseContent.Data.Token,
                 SessionId = responseContent.Data.SessionId?.ToString(),
                 MasterToken = responseContent.Data.MasterToken,
-                RefreshToken = responseContent.Data.RefreshToken,
-                ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.MasterTokenValidityInSeconds),
+                ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.ValidityInSeconds),
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.MasterValidityInSeconds),
                 TokenType = "Snowflake"
             };
         }

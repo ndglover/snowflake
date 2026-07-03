@@ -82,9 +82,10 @@ internal class PooledConnection : IPooledConnection
 
     public bool IsDisposed => _disposed;
 
-    // Evaluated against the pool's clock (not AuthToken.IsExpired, which reads the wall clock) so all
-    // pool timekeeping — idle, lifetime, token expiry — shares one clock and is testable together.
-    public bool IsTokenExpired => _timeProvider.GetUtcNow() >= AuthToken.ExpiresAt;
+    // Keyed on the master-token expiry (not the ~1h session), because a session-expired connection is
+    // still usable via reactive renewal until the master lapses — so the pool should only discard it
+    // once it's truly beyond recovery. Evaluated on the pool's clock so all pool timekeeping shares one.
+    public bool IsTokenExpired => _timeProvider.GetUtcNow() >= AuthToken.MasterExpiresAt;
 
     public bool IsFaulted { get; private set; }
 

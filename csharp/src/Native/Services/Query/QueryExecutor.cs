@@ -443,8 +443,11 @@ internal class QueryExecutor : IQueryExecutor
             authToken.SessionToken = response.Data.SessionToken;
             if (!string.IsNullOrEmpty(response.Data.MasterToken))
                 authToken.MasterToken = response.Data.MasterToken;
+            // Renewal returns fresh session + master validities; roll both ceilings forward.
             if (response.Data.ValidityInSeconds > 0)
                 authToken.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(response.Data.ValidityInSeconds);
+            if (response.Data.MasterValidityInSeconds > 0)
+                authToken.MasterExpiresAt = DateTimeOffset.UtcNow.AddSeconds(response.Data.MasterValidityInSeconds);
         }
         finally
         {

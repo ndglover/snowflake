@@ -42,8 +42,12 @@ internal class LoginData
     public string? SessionToken { get; set; }
     public long? SessionId { get; set; }
     public string? MasterToken { get; set; }
-    public string? RefreshToken { get; set; }
-    public int MasterTokenValidityInSeconds { get; set; } = 14400;
+
+    /// <summary>Session-token validity in seconds (Snowflake <c>validityInSeconds</c>, ~1h).</summary>
+    public int ValidityInSeconds { get; set; } = 3600;
+
+    /// <summary>Master-token validity in seconds (Snowflake <c>masterValidityInSeconds</c>, ~4h).</summary>
+    public int MasterValidityInSeconds { get; set; } = 14400;
 }
 
 /// <summary>

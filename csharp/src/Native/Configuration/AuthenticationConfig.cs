@@ -62,11 +62,6 @@ internal class AuthenticationConfig
     public string? OAuthToken { get; set; }
 
     /// <summary>
-    /// Gets or sets the OAuth refresh token.
-    /// </summary>
-    public string? OAuthRefreshToken { get; set; }
-
-    /// <summary>
     /// Gets or sets additional SSO properties.
     /// </summary>
     public Dictionary<string, string> SsoProperties { get; set; } = new();

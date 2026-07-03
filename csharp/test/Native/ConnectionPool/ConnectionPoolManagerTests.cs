@@ -160,6 +160,7 @@ public class ConnectionPoolManagerTests
                 SessionToken = "session",
                 MasterToken = "master",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddHours(4),
             });
 
         var pool = new ConnectionPoolManager(authService, sessionLifecycle: null);
@@ -279,6 +280,7 @@ public class ConnectionPoolManagerTests
                 SessionToken = "session",
                 MasterToken = "master",
                 ExpiresAt = fakeTime.GetUtcNow().AddHours(1),
+                MasterExpiresAt = fakeTime.GetUtcNow().AddHours(4),
             });
 
         var heartbeatFired = new TaskCompletionSource();
@@ -351,6 +353,7 @@ public class ConnectionPoolManagerTests
                 SessionToken = "session",
                 MasterToken = "master",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddHours(4),
             });
 
         using var pool = new ConnectionPoolManager(authService);

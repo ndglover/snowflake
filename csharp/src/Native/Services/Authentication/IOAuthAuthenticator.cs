@@ -46,14 +46,4 @@ internal interface IOAuthAuthenticator
         string oauthToken,
         ConnectionConfig? config = null,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Refreshes an OAuth token using a refresh token.
-    /// </summary>
-    /// <param name="refreshToken">The refresh token.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A new authentication token.</returns>
-    Task<AuthenticationToken> RefreshTokenAsync(
-        string refreshToken,
-        CancellationToken cancellationToken = default);
 }

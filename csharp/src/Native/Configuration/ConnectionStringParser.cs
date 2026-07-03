@@ -117,7 +117,7 @@ internal static class ConnectionStringParser
             config.PrefetchConcurrency = Math.Max(1, prefetch);
         }
 
-        if (parameters.TryGetValue("enable_compression", out string? compressionStr) &&
+        if (parameters.TryGetValue("adbc.snowflake.sql.client_option.enable_compression", out string? compressionStr) &&
             bool.TryParse(compressionStr, out bool enableCompression))
         {
             config.EnableCompression = enableCompression;

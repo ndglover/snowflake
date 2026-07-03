@@ -46,7 +46,24 @@ second, since D9 touches the token type used everywhere and deserves its own dif
 
 Ranked by expected impact. M1 is the one with pathological worst-case behavior.
 
-### M1 (High) — Chunk prefetch back-pressure is broken: whole result set can buffer in memory
+### M1 (High) — ✅ FIXED 2026-07-01 (with M3) — chunk prefetch back-pressure was broken
+Reworked to a **sliding window**: a chunk holds its window slot from launch until the channel
+accepts it (the semaphore released-at-download-completion is gone entirely), bounding resident
+chunks to ~2× `prefetch_concurrency` regardless of consumer speed. M3 folded in: buffers are now
+pre-sized from `ChunkInfo.UncompressedSize`. Verified by new offline tests
+(`ChunkedArrowArrayStreamTests`): a stalled consumer sees ≤ window+channel+1 downloads (was: all),
+order/completeness preserved, dispose-mid-flight unwinds promptly. **Fast-consumer benchmark
+(5 runs, Release): 1M rows avg 2,290 ms vs 2,531 ms before — no regression; ~9% faster** (the
+pre-sized buffers outweigh any head-of-line effect at real chunk-size distributions).
+
+**Known trade-off for a *really* slow consumer (documented, accepted):** late chunks now download
+when the consumer gets there, not eagerly upfront — so multi-hour consumption can hit **expired
+presigned chunk URLs** (403, not retried as transient). The old unbounded design masked this by
+downloading everything immediately (at unbounded memory cost). If hours-long streaming becomes a
+real scenario, the fix is refreshing chunk URLs from the query-result endpoint on expiry.
+Session-token expiry is *not* a chunk-path risk (S3 downloads authenticate via chunk headers/qrmk,
+not the session token), and `HttpClient.Timeout` applies per download, unaffected by consumer speed.
+Original finding below.
 `ChunkedArrowArrayStream.StartPrefetchAsync` (`:114–132`) gates *download starts* on a
 `SemaphoreSlim(prefetchConcurrency)`, but `DownloadChunkAsync` releases the permit in its
 `finally` — i.e. **when the download completes**, not when the chunk is handed to the consumer.
@@ -78,7 +95,7 @@ often **megabytes** — so the payload exists simultaneously as: UTF-8 bytes →
 the response stream. Removes the `StreamReader`, the full-payload string, and one LOH allocation
 per query. One-line change plus error-handling.
 
-### M3 (Medium) — Chunk download buffers grow by doubling; size is known in advance
+### M3 (Medium) — ✅ FIXED with M1 — chunk download buffers grew by doubling; size was known in advance
 `DownloadChunkAsync` (`:184`) copies into `new MemoryStream()` with no capacity, so a multi-MB
 chunk incurs log₂(size) grow-and-copy cycles and repeated LOH churn. Snowflake tells us the size:
 `ChunkInfo.UncompressedSize` is deserialized (`SnowflakeQueryResponse.cs:77`) but never used —

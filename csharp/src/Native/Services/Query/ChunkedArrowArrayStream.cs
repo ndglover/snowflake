@@ -49,7 +49,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         CancellationToken cancellationToken,
         int prefetchConcurrency = 10)
     {
-        var chunkUrls = (chunks ?? []).Select(c => c.Url).Where(u => !string.IsNullOrWhiteSpace(u)).ToList();
+        var chunkList = (chunks ?? []).Where(c => !string.IsNullOrWhiteSpace(c.Url)).ToList();
 
         Stream firstStream;
         Ipc.ArrowStreamReader firstReader;
@@ -60,11 +60,11 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
             firstStream = new MemoryStream(arrowBytes);
             firstReader = new Ipc.ArrowStreamReader(firstStream);
         }
-        else if (chunkUrls.Count > 0)
+        else if (chunkList.Count > 0)
         {
-            var url = chunkUrls[0];
-            chunkUrls.RemoveAt(0);
-            firstStream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
+            var first = chunkList[0];
+            chunkList.RemoveAt(0);
+            firstStream = await apiClient.GetArrowStreamAsync(first.Url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
             firstReader = new Ipc.ArrowStreamReader(firstStream);
         }
         else
@@ -74,7 +74,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
 
         var schema = firstReader.Schema;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var bufferSize = Math.Min(chunkUrls.Count, prefetchConcurrency);
+        var bufferSize = Math.Min(chunkList.Count, prefetchConcurrency);
         var channel = Channel.CreateBounded<PrefetchedChunk>(new BoundedChannelOptions(Math.Max(bufferSize, 1))
         {
             SingleReader = true,
@@ -83,9 +83,9 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         });
 
         Task prefetchTask;
-        if (chunkUrls.Count > 0)
+        if (chunkList.Count > 0)
         {
-            prefetchTask = StartPrefetchAsync(apiClient, authToken, chunkHeaders, qrmk, chunkUrls, channel, cts, prefetchConcurrency);
+            prefetchTask = StartPrefetchAsync(apiClient, authToken, chunkHeaders, qrmk, chunkList, channel, cts, prefetchConcurrency);
         }
         else
         {
@@ -104,31 +104,47 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         AuthenticationToken authToken,
         Dictionary<string, string>? chunkHeaders,
         string? qrmk,
-        List<string> chunkUrls,
+        List<ChunkInfo> chunks,
         Channel<PrefetchedChunk> channel,
         CancellationTokenSource cts,
         int maxConcurrency)
     {
         return Task.Run(async () =>
         {
-            var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-            var pendingChunks = new Task<PrefetchedChunk>?[chunkUrls.Count];
+            // Sliding window of launched-but-not-yet-handed-off downloads. A chunk keeps its
+            // window slot from launch until the channel accepts it, so total resident chunks are
+            // bounded at ~2x maxConcurrency (window + channel) no matter how slowly the consumer
+            // reads — a slow consumer back-pressures the downloads instead of the whole result
+            // set accumulating in memory. (Releasing slots at download *completion* would let a
+            // slow consumer buffer every chunk of the result set.) The trade-off is head-of-line:
+            // while the oldest download is still in flight, later completed chunks hold their
+            // slots and no new downloads launch; with roughly uniform chunk sizes this keeps the
+            // pipe ~full for a fast consumer.
+            var window = new Queue<Task<PrefetchedChunk>>(maxConcurrency);
+            int next = 0;
 
             try
             {
-                for (int i = 0; i < chunkUrls.Count; i++)
+                while (next < chunks.Count || window.Count > 0)
                 {
-                    cts.Token.ThrowIfCancellationRequested();
-                    await semaphore.WaitAsync(cts.Token).ConfigureAwait(false);
-                    var url = chunkUrls[i];
-                    pendingChunks[i] = DownloadChunkAsync(apiClient, authToken, chunkHeaders, qrmk, url, semaphore, cts.Token);
-                }
+                    while (next < chunks.Count && window.Count < maxConcurrency)
+                    {
+                        cts.Token.ThrowIfCancellationRequested();
+                        window.Enqueue(DownloadChunkAsync(apiClient, authToken, chunkHeaders, qrmk, chunks[next], cts.Token));
+                        next++;
+                    }
 
-                for (int i = 0; i < pendingChunks.Length; i++)
-                {
-                    var chunk = await pendingChunks[i]!.ConfigureAwait(false);
-                    await channel.Writer.WriteAsync(chunk, cts.Token).ConfigureAwait(false);
-                    pendingChunks[i] = null; // handed off; the consumer now owns disposal
+                    PrefetchedChunk chunk = await window.Dequeue().ConfigureAwait(false);
+                    try
+                    {
+                        await channel.Writer.WriteAsync(chunk, cts.Token).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // The consumer never received it; it is ours to clean up.
+                        await chunk.Stream.DisposeAsync();
+                        throw;
+                    }
                 }
 
                 channel.Writer.TryComplete();
@@ -147,19 +163,14 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
             }
             finally
             {
-                // Settle any downloads not handed to the consumer (siblings still in flight
-                // after a failure/cancellation), disposing the buffers they produced so they
-                // don't leak and their exceptions don't go unobserved. Only after every
-                // download has completed is it safe to dispose the semaphore -- doing so
-                // earlier would race the in-flight Release() calls.
-                foreach (var pending in pendingChunks)
+                // Settle any downloads still in the window (siblings in flight after a failure /
+                // cancellation), disposing the buffers they produced so they don't leak and their
+                // exceptions don't go unobserved.
+                while (window.Count > 0)
                 {
-                    if (pending is null) continue;
-                    try { (await pending.ConfigureAwait(false)).Stream.Dispose(); }
+                    try { await (await window.Dequeue().ConfigureAwait(false)).Stream.DisposeAsync(); }
                     catch { /* cancelled or failed download -- nothing to dispose */ }
                 }
-
-                semaphore.Dispose();
             }
         });
     }
@@ -169,27 +180,21 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
         AuthenticationToken authToken,
         Dictionary<string, string>? chunkHeaders,
         string? qrmk,
-        string url,
-        SemaphoreSlim semaphore,
+        ChunkInfo chunk,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            // GetArrowStreamAsync returns as soon as the HTTP headers arrive (and only
-            // wraps the live network/gzip stream). Fully buffer the chunk here so the
-            // expensive part -- the body transfer + decompression -- happens in parallel
-            // across the prefetch workers, not serially on the consumer thread. The
-            // consumer then just does CPU-bound Arrow decode from memory.
-            using var netStream = await apiClient.GetArrowStreamAsync(url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
-            var buffer = new MemoryStream();
-            await netStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-            buffer.Position = 0;
-            return new PrefetchedChunk(buffer);
-        }
-        finally
-        {
-            semaphore.Release();
-        }
+        // GetArrowStreamAsync returns as soon as the HTTP headers arrive (and only
+        // wraps the live network/gzip stream). Fully buffer the chunk here so the
+        // expensive part -- the body transfer + decompression -- happens in parallel
+        // across the prefetch workers, not serially on the consumer thread. The
+        // consumer then just does CPU-bound Arrow decode from memory.
+        await using var netStream = await apiClient.GetArrowStreamAsync(chunk.Url, authToken, chunkHeaders, qrmk, cancellationToken).ConfigureAwait(false);
+        // Pre-size from the server-reported uncompressed size: these are multi-megabyte
+        // (large-object-heap) buffers, so growth-doubling would copy each one several times.
+        var buffer = new MemoryStream(Math.Max(chunk.UncompressedSize, 0));
+        await netStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+        buffer.Position = 0;
+        return new PrefetchedChunk(buffer);
     }
 
     public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)

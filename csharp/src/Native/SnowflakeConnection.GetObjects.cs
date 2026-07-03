@@ -362,7 +362,7 @@ public sealed partial class SnowflakeConnection
     private List<Dictionary<string, string?>> RunMetadataQuery(string sql, IReadOnlyList<string?>? bindValues = null)
     {
         if (_queryExecutor == null || _pooledConnection == null)
-            throw new InvalidOperationException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.");
 
         var request = new QueryRequest
         {

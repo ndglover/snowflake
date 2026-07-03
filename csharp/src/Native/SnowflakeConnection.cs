@@ -82,7 +82,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         var pooledConnection = await connectionPool.AcquireConnectionAsync(config).ConfigureAwait(false);
         if (pooledConnection is null)
         {
-            throw new InvalidOperationException("Failed to acquire pooled connection");
+            throw new AdbcException("Failed to acquire pooled connection.");
         }
         log.LogInformation("Acquired pooled connection {ConnectionId}", pooledConnection.ConnectionId);
 
@@ -104,7 +104,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new InvalidOperationException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.");
 
         return new SnowflakeStatement(_config, _pooledConnection, _queryExecutor);
     }
@@ -123,7 +123,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new InvalidOperationException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.");
 
         return _queryExecutor.RenewSessionAsync(_pooledConnection.AuthToken, cancellationToken);
     }
@@ -136,7 +136,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new InvalidOperationException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.");
 
         return _queryExecutor.HeartbeatAsync(_pooledConnection.AuthToken, cancellationToken);
     }
@@ -191,7 +191,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
 
         if (_queryExecutor == null || _pooledConnection == null)
-            throw new InvalidOperationException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.");
 
         var parts = new List<string>(3);
         if (!string.IsNullOrEmpty(catalog))

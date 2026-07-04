@@ -68,7 +68,11 @@ internal class SnowflakeLoginClient
         ConnectionConfig? config = null,
         CancellationToken cancellationToken = default)
     {
-        // Fill in common fields
+        // Fill in common fields. CLIENT_APP_ID/CLIENT_APP_VERSION are NOT free-form identity:
+        // Snowflake gates server-side capabilities on them — a ".NET" client below the version
+        // that introduced Arrow support gets JSON results regardless of the requested
+        // DOTNET_QUERY_RESULT_FORMAT. So this must claim an Arrow-capable connector-net version,
+        // not this driver's own assembly version.
         authData.CLIENT_APP_ID = ".NET";
         authData.CLIENT_APP_VERSION = "3.1.0";
         authData.ACCOUNT_NAME = account;
@@ -99,13 +103,11 @@ internal class SnowflakeLoginClient
 
             return new AuthenticationToken
             {
-                AccessToken = responseContent.Data.Token ?? throw new AdbcException("No token received from Snowflake."),
-                SessionToken = responseContent.Data.Token,
+                SessionToken = responseContent.Data.Token ?? throw new AdbcException("No token received from Snowflake."),
                 SessionId = responseContent.Data.SessionId?.ToString(),
                 MasterToken = responseContent.Data.MasterToken,
                 ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.ValidityInSeconds),
-                MasterExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.MasterValidityInSeconds),
-                TokenType = "Snowflake"
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.MasterValidityInSeconds)
             };
         }
         catch (HttpRequestException ex)

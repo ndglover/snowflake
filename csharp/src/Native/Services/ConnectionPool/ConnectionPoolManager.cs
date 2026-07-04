@@ -104,7 +104,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                 return connection!;
             }
 
-            var newConnection = await CreateConnectionAsync(config, cancellationToken);
+            var newConnection = await CreateConnectionAsync(poolKey, config, cancellationToken);
             poolEntry.ActiveConnections.TryAdd(newConnection.ConnectionId, newConnection);
             Interlocked.Increment(ref _totalConnectionsCreated);
             return newConnection;
@@ -183,8 +183,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     {
         ArgumentNullException.ThrowIfNull(connection);
 
-        var poolKey = GeneratePoolKey(connection.Config);
-        if (!_pools.TryGetValue(poolKey, out var poolEntry))
+        if (!_pools.TryGetValue(connection.PoolKey, out var poolEntry))
             return;
 
         poolEntry.ActiveConnections.TryRemove(connection.ConnectionId, out _);
@@ -383,6 +382,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     }
 
     private async Task<IPooledConnection> CreateConnectionAsync(
+        string poolKey,
         ConnectionConfig config,
         CancellationToken cancellationToken)
     {
@@ -407,6 +407,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
 
         return new PooledConnection(
             Guid.NewGuid().ToString(),
+            poolKey,
             authToken,
             config,
             _sessionLifecycle,

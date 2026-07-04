@@ -46,6 +46,7 @@ public class ConnectionPoolManagerTests
         public int RecordHeartbeatCount { get; private set; }
 
         public string ConnectionId => "fake";
+        public string PoolKey => "fake-pool-key";
         public AuthenticationToken AuthToken { get; } = new();
         public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
         public bool IsDisposed { get; init; }

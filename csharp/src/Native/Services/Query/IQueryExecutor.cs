@@ -193,7 +193,9 @@ internal class QueryResult
 }
 
 /// <summary>
-/// Represents a prepared statement.
+/// Represents a prepared statement. Snowflake's protocol reports only the result columns from a
+/// describe — never bind-parameter types — so there is deliberately no parameter schema here
+/// (<c>GetParameterSchema</c> throws NotImplemented for the same reason).
 /// </summary>
 internal class PreparedStatement
 {
@@ -206,11 +208,6 @@ internal class PreparedStatement
     /// Gets or sets the SQL statement text.
     /// </summary>
     public string Statement { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the parameter schema.
-    /// </summary>
-    public Schema? ParameterSchema { get; set; }
 
     /// <summary>
     /// Gets or sets the result schema (if known).
@@ -253,4 +250,10 @@ internal class QueryError
     /// Gets or sets the error message.
     /// </summary>
     public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the originating exception, when the failure came from one — carried so the
+    /// statement layer can rethrow with the full stack/inner chain instead of a flattened message.
+    /// </summary>
+    public Exception? Exception { get; set; }
 }

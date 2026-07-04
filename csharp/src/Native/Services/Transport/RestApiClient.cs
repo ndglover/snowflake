@@ -40,10 +40,36 @@ namespace AdbcDrivers.Snowflake.Native.Services.Transport;
 /// </summary>
 internal class RestApiClient : IRestApiClient
 {
-    private readonly HttpClient _httpClient;
-    private readonly bool _enableCompression;
-    private readonly int _maxRetries;
-    private readonly TimeSpan _baseRetryDelay;
+    readonly HttpClient _httpClient;
+    readonly bool _enableCompression;
+    readonly int _maxRetries;
+    readonly TimeSpan _baseRetryDelay;
+
+    // Serializer options backed by the source-generated context (see SnowflakeJsonContext).
+    static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        TypeInfoResolver = SnowflakeJsonContext.Default
+    };
+
+    // Header values are immutable; build them once instead of re-parsing per request.
+    static readonly MediaTypeWithQualityHeaderValue SnowflakeAccept = new("application/snowflake");
+    static readonly MediaTypeWithQualityHeaderValue ArrowStreamAccept = new("application/vnd.apache.arrow.stream");
+    static readonly StringWithQualityHeaderValue GzipEncoding = new("gzip");
+    static readonly StringWithQualityHeaderValue DeflateEncoding = new("deflate");
+
+    /// <summary>The driver's own version, reported in the user agent and login payload.</summary>
+    static readonly string DriverVersion =
+        typeof(RestApiClient).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+
+    // The server requires the leading ".NET/{version}" product token to enable Arrow results; the
+    // OS comment and runtime token are derived from the actual environment rather than hardcoded.
+    static readonly ProductInfoHeaderValue[] UserAgent =
+    [
+        new(".NET", DriverVersion),
+        new(
+            $"({System.Runtime.InteropServices.RuntimeInformation.OSDescription.Replace('(', '[').Replace(')', ']').Trim()})"),
+        new(".NETCoreApp", Environment.Version.ToString(2)),
+    ];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RestApiClient"/> class.
@@ -79,9 +105,9 @@ internal class RestApiClient : IRestApiClient
             using var requestMessage = new HttpRequestMessage(HttpMethod.Post, endpoint);
             ConfigureRequest(requestMessage, token);
 
-            requestMessage.Content = JsonContent.Create(request);
+            requestMessage.Content = JsonContent.Create(request, options: JsonOptions);
             AddCompressionHeadersIfEnabled(requestMessage);
-            
+
             using var response = await _httpClient.SendAsync(
                 requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
@@ -119,12 +145,13 @@ internal class RestApiClient : IRestApiClient
                 }
                 else
                 {
-                    requestMessage.Headers.TryAddWithoutValidation("x-amz-server-side-encryption-customer-algorithm", "AES256");
+                    requestMessage.Headers.TryAddWithoutValidation("x-amz-server-side-encryption-customer-algorithm",
+                        "AES256");
                     requestMessage.Headers.TryAddWithoutValidation("x-amz-server-side-encryption-customer-key", qrmk);
                 }
             }
 
-            requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.apache.arrow.stream"));
+            requestMessage.Headers.Accept.Add(ArrowStreamAccept);
 
             var response = await _httpClient.SendAsync(
                 requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
@@ -136,15 +163,15 @@ internal class RestApiClient : IRestApiClient
         }, cancellationToken);
     }
 
-    private void AddCompressionHeadersIfEnabled(HttpRequestMessage request)
+    void AddCompressionHeadersIfEnabled(HttpRequestMessage request)
     {
         if (!_enableCompression) return;
 
-        request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
-        request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
+        request.Headers.AcceptEncoding.Add(GzipEncoding);
+        request.Headers.AcceptEncoding.Add(DeflateEncoding);
     }
 
-    private async Task<Stream> GetResponseStreamAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    async Task<Stream> GetResponseStreamAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         if (response.Content.Headers.ContentEncoding.Contains("gzip"))
@@ -156,27 +183,25 @@ internal class RestApiClient : IRestApiClient
         return stream;
     }
 
-    private async Task<ApiResponse<T>> ReadApiResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
+    async Task<ApiResponse<T>> ReadApiResponseAsync<T>(HttpResponseMessage response,
+        CancellationToken cancellationToken)
     {
         await using var stream = await GetResponseStreamAsync(response, cancellationToken).ConfigureAwait(false);
-        return await JsonSerializer.DeserializeAsync<ApiResponse<T>>(stream, cancellationToken: cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("Failed to deserialize API response.");
+        return await JsonSerializer.DeserializeAsync<ApiResponse<T>>(stream, JsonOptions, cancellationToken)
+                   .ConfigureAwait(false)
+               ?? throw new InvalidOperationException("Failed to deserialize API response.");
     }
 
-    private void ConfigureRequest(HttpRequestMessage request, AuthenticationToken token)
+    void ConfigureRequest(HttpRequestMessage request, AuthenticationToken token)
     {
-        var sessionToken = token.SessionToken ?? token.AccessToken;
-        var authHeader = $"Snowflake Token=\"{sessionToken}\"";
-        request.Headers.Add("Authorization", authHeader);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/snowflake"));
+        request.Headers.Add("Authorization", $"Snowflake Token=\"{token.SessionToken}\"");
+        request.Headers.Accept.Add(SnowflakeAccept);
 
-        // User agent must be in the ".NET/{version}" form for the server to enable Arrow results.
-        request.Headers.UserAgent.ParseAdd(".NET/1.0.0");
-        request.Headers.UserAgent.ParseAdd("(Windows)");
-        request.Headers.UserAgent.ParseAdd(".NETCoreApp/8.0");
+        foreach (var part in UserAgent)
+            request.Headers.UserAgent.Add(part);
     }
 
-    private async Task<TResult> ExecuteWithRetryAsync<TResult>(
+    async Task<TResult> ExecuteWithRetryAsync<TResult>(
         Func<Task<TResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -203,7 +228,7 @@ internal class RestApiClient : IRestApiClient
         throw lastException ?? new InvalidOperationException("Operation failed after retries.");
     }
 
-    private async Task DelayAsync(int attempt, CancellationToken cancellationToken)
+    async Task DelayAsync(int attempt, CancellationToken cancellationToken)
     {
         var delay = TimeSpan.FromMilliseconds(
             _baseRetryDelay.TotalMilliseconds * Math.Pow(2, attempt) +
@@ -211,7 +236,7 @@ internal class RestApiClient : IRestApiClient
         await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
     }
 
-    private static bool IsTransientError(HttpRequestException ex)
+    static bool IsTransientError(HttpRequestException ex)
     {
         // Check for transient HTTP status codes
         if (ex.StatusCode.HasValue)
@@ -220,7 +245,7 @@ internal class RestApiClient : IRestApiClient
             return statusCode == 408 || // Request Timeout
                    statusCode == 429 || // Too Many Requests
                    statusCode == 503 || // Service Unavailable
-                   statusCode == 504;   // Gateway Timeout
+                   statusCode == 504; // Gateway Timeout
         }
 
         // Check for network-related errors

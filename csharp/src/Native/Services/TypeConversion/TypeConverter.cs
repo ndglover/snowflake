@@ -36,6 +36,9 @@ namespace AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 /// </summary>
 internal class TypeConverter : ITypeConverter
 {
+    /// <summary>Shared instance — the converter is stateless, so one serves every consumer.</summary>
+    internal static TypeConverter Shared { get; } = new();
+
     /// <inheritdoc/>
     public IArrowType ConvertSnowflakeTypeToArrow(SnowflakeDataType snowflakeType)
     {

@@ -15,8 +15,10 @@ the existing `BenchmarkTests` (Native vs Interop, 5-run protocol in
 ## 1. Dead code — ✅ REMOVED (D1–D8, D10 swept 2026-07-01; ~930 lines incl. tests)
 
 Extra finds during the sweep, also removed: `QueryRequest.Format` + the `ResultFormat` enum (never
-read — the result format is forced via session params). Deferred to a follow-up as planned:
-D9 (`TokenType`/`AccessToken` collapse) and D11 (`PreparedStatement.ParameterSchema`).
+read — the result format is forced via session params). D9 (`TokenType` removed; `AccessToken`
+collapsed into `SessionToken`, keeping the login null-check) and D11
+(`PreparedStatement.ParameterSchema` removed, rationale moved to the class doc) landed in the
+step-6 pass.
 `docs/design.md` still shows the original interface sketch including removed members — historical,
 left as-is.
 
@@ -149,19 +151,27 @@ source validity buffer instead of re-appending bits. Same output, several× less
 Measure with the 1M benchmark — this only pays off on transformed columns (scaled NUMBER, TIME,
 TIMESTAMP), so impact depends on the schema.
 
-### C2 (Medium) — Reflection-based System.Text.Json for a small, fixed wire model
+### C2 (Medium) — ✅ FIXED 2026-07-01 — reflection-based System.Text.Json for a small, fixed wire model
+`SnowflakeJsonContext` (source-generated) now backs the `RestApiClient` path for the closed set of
+query-protocol types; the heartbeat's untyped `new object()` body became a typed
+`EmptyRequestBody`, and `SnowflakeBinding.Value` narrowed `object?`→`string?` (every producer was
+already a string). The login path deliberately stays on reflection web-defaults (once per
+connection; relies on case-insensitive matching). Original finding below.
 Every request (`JsonContent.Create`) and response (`Deserialize`) uses reflection-based STJ.
 The wire model is a closed set of ~15 types. A **source-generated `JsonSerializerContext`** cuts
 serializer overhead and first-call warmup, eliminates reflection metadata allocations, and makes
 the driver trimming/AOT-safe. Mechanical change; pairs naturally with M2.
 
-### C3 (Low-Medium) — `GeneratePoolKey` computes SHA-256 + string.Join on every acquire *and* release
+### C3 (Low-Medium) — ✅ FIXED 2026-07-01 — `GeneratePoolKey` hashed on every acquire *and* release
+`IPooledConnection.PoolKey` now carries the key computed once at creation; `ReleaseConnection` is a
+dictionary lookup. Original finding below.
 `ConnectionPoolManager.GeneratePoolKey` hashes the credential and joins ~13 fields each call, and
 `ReleaseConnection` recomputes it for a connection the pool already keyed once. **Fix:** compute
 once per acquire and carry the key on `IPooledConnection` (set at creation), so release is a
 dictionary lookup with no hashing. Also avoids the transient key string churn per operation.
 
-### C4 (Low) — Per-request header re-parsing
+### C4 (Low) — ✅ FIXED 2026-07-01 — per-request header re-parsing
+Accept / Accept-Encoding / User-Agent values are now `static readonly`. Original finding below.
 `ConfigureRequest` (`RestApiClient.cs:187–198`) re-parses three `UserAgent` fragments and
 constructs a new `MediaTypeWithQualityHeaderValue` per request. Cache them in `static readonly`
 fields (`ProductInfoHeaderValue` / `MediaTypeWithQualityHeaderValue` are immutable-enough to share).
@@ -181,10 +191,10 @@ filters and group client-side — this is how the Go driver keeps it flat. Flagg
 | # | Item | Where |
 |---|------|-------|
 | H1 | ✅ FIXED with M2 — **`HttpResponseMessage` never disposed** on the JSON path; now `using`-scoped in `PostAsync` (and `GetArrowStreamAsync`'s intentional non-disposal is documented at the call site). `ConfigureAwait(false)` also added throughout the file, and `DelayAsync` got its missing `private`. | `RestApiClient.cs` |
-| H2 | **Hardcoded client identity**: `UserAgent` claims `.NET/1.0.0 (Windows) .NETCoreApp/8.0` regardless of OS/runtime/driver version, and the login sends `CLIENT_APP_VERSION = "3.1.0"`. Derive from assembly version + `RuntimeInformation` (keeping the `.NET/{ver}` shape the server requires for Arrow). | `RestApiClient.cs:194–197`, `SnowflakeLoginClient.cs:72–73` |
-| H3 | **Exception fidelity**: `ExecuteQueryAsync`'s catch-all flattens to `ex.Message` in a `QueryError`, and `SnowflakeStatement` re-throws `AdbcException` built from that string — the original exception (stack, inner) is lost. Carry the exception into the error/`AdbcException` as `InnerException`. | `QueryExecutor.cs:139–156`, `SnowflakeStatement.cs` |
-| H4 | **`TypeConverter` is stateless but instantiated 3×** (connection, statement, session-client heartbeat). Add `TypeConverter.Shared` and use it. Trivial. | `SnowflakeConnection.cs:90`, `SnowflakeStatement.cs:68`, `SnowflakeSessionClient.cs:62` |
-| H5 | **Style**: `DelayAsync` missing `private`; `QueryExecutor._renewLock` (SemaphoreSlim) never disposed (benign — no wait-handle — but `QueryExecutor` could be `IDisposable` for tidiness). | `RestApiClient.cs:227`, `QueryExecutor.cs:50` |
+| H2 | ✅ FIXED (with a hard-won caveat) — the User-Agent now reports the real driver version, OS, and runtime (leading `.NET/{ver}` token preserved). **But `CLIENT_APP_VERSION` at login must stay `"3.1.0"`:** Snowflake gates server capabilities on the claimed client id+version, and a ".NET" client below the Arrow-capable connector-net version silently gets **JSON results** (confirmed live — switching it to our assembly version broke every result-stream test). Documented at the assignment. | `RestApiClient.cs`, `SnowflakeLoginClient.cs` |
+| H3 | ✅ FIXED — `QueryError.Exception` carries the originating exception; `SnowflakeStatement.ToAdbcException` rethrows with it as `InnerException`, so the stack/inner chain survives. | `QueryExecutor.cs`, `SnowflakeStatement.cs` |
+| H4 | ✅ FIXED — `TypeConverter.Shared` used at all three sites. | |
+| H5 | ✅ FIXED (with M2) — `DelayAsync` is `private`; `_renewLock` non-disposal accepted (no wait handle allocated — benign). | |
 | H6 | Retry parity note: gosnowflake appends `retryCount`/`clientStartTime` to retried query URLs so the server can distinguish retries; we resend the identical URL (same `requestId`, which Snowflake dedups — correct, just less observable). Optional parity tweak. | `RestApiClient.cs:200` |
 
 Already tracked in TODO (not repeated here): pool statistics surface-or-remove, the
@@ -193,14 +203,18 @@ pool-waiter wakeup.
 
 ---
 
-## 5. Suggested order of attack
+## 5. Order of attack — ✅ ALL STEPS COMPLETE (2026-07-01)
 
-1. **Dead-code sweep** (D1–D8, D10): ~600 lines gone, zero behavior risk, shrinks every later diff.
-2. **M2 + H1** (stream deserialization + response disposal): one file, immediate memory win on every query.
-3. **M1** (prefetch back-pressure): small, subtle — needs the failure-path reasoning done carefully; add a slow-consumer unit test with a fake API client.
-4. **M3** (pre-sized chunk buffers): mechanical once `ChunkInfo` is plumbed.
-5. **C1 + M4** (decode loop despecialization): biggest CPU item; verify with the 1M benchmark before/after.
-6. **C2** (source-gen JSON), **C3** (cached pool key), **C4**, **H2–H5** as convenient.
+1. ✅ **Dead-code sweep** (D1–D8, D10 + extras; D9/D11 in step 6): ~950 lines gone.
+2. ✅ **M2 + H1** (stream deserialization + response disposal).
+3. ✅ **M1** (prefetch back-pressure, sliding window + slow-consumer tests).
+4. ✅ **M3** (pre-sized chunk buffers).
+5. ✅ **C1 + M4** (decode loop despecialization + new offline decode tests).
+6. ✅ **C2, C3, C4, H2–H5, D9, D11.**
 
-Re-run the 5-run Native-vs-Interop benchmark after items 2–5 and refresh
-[benchmark-results.md](benchmark-results.md).
+Verified after step 6: 146 unit + **77 live integration** tests green. User-measured benchmark:
+native ≤ interop at 1,000 (0.7×) and 1,000,000 rows (0.86×). Remaining (deliberately not done):
+**C5** (`GetObjects` N+1 — metadata path, flagged for when catalog tooling matters) and **H6**
+(optional `retryCount` URL parity on retries). See also
+[perf-explainer-2026-07-01.md](perf-explainer-2026-07-01.md) for a plain-language account of the
+performance changes.

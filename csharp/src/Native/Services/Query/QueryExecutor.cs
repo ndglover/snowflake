@@ -149,7 +149,8 @@ internal class QueryExecutor : IQueryExecutor
                     new QueryError()
                     {
                         ErrorCode = "EXECUTION_ERROR",
-                        Message = $"Query execution failed: {ex.Message}"
+                        Message = $"Query execution failed: {ex.Message}",
+                        Exception = ex
                     }
                 ]
             };
@@ -279,9 +280,6 @@ internal class QueryExecutor : IQueryExecutor
         {
             StatementHandle = response.Data.QueryId ?? string.Empty,
             Statement = request.Statement,
-            // describeOnly returns the result columns (rowtype) but not bind/parameter
-            // metadata, so ParameterSchema is left null.
-            ParameterSchema = null,
             ResultSchema = BuildSchemaFromRowType(response.Data.RowType)
         };
     }
@@ -385,8 +383,8 @@ internal class QueryExecutor : IQueryExecutor
         var requestGuid = Guid.NewGuid().ToString();
         var endpoint = $"{_accountUrl}{HeartbeatEndpoint}?requestId={requestId}&request_guid={requestGuid}";
 
-        var response = await _apiClient.PostAsync<object, SnowflakeQueryResponse>(
-            endpoint, new object(), authToken, cancellationToken).ConfigureAwait(false);
+        var response = await _apiClient.PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
+            endpoint, EmptyRequestBody.Instance, authToken, cancellationToken).ConfigureAwait(false);
 
         // The heartbeat keeps the session alive; if the session token has already expired the
         // heartbeat itself comes back 390112, so renew with the master token.

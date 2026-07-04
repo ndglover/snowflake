@@ -38,6 +38,12 @@ internal interface IPooledConnection : IDisposable
     string ConnectionId { get; }
 
     /// <summary>
+    /// Gets the pool key this connection was created under. Computed once at creation (it hashes
+    /// the credential), so releases don't recompute it.
+    /// </summary>
+    string PoolKey { get; }
+
+    /// <summary>
     /// Gets the authentication token for this connection.
     /// </summary>
     AuthenticationToken AuthToken { get; }

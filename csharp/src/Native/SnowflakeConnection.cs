@@ -83,7 +83,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         log.LogInformation("Acquired pooled connection {ConnectionId}", pooledConnection.ConnectionId);
 
         var apiClient = new RestApiClient(httpClient, config.EnableCompression);
-        var typeConverter = new TypeConverter();
+        var typeConverter = TypeConverter.Shared;
 
 
         var queryExecutor = new QueryExecutor(apiClient, typeConverter, config.Account, config.Network, loggerFactory.CreateLogger<QueryExecutor>());

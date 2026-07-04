@@ -64,8 +64,6 @@ internal class OAuthAuthenticator : IOAuthAuthenticator
             TOKEN = oauthToken
         };
 
-        var result = await _loginClient.LoginAsync(account, authData, config, cancellationToken);
-        result.TokenType = "Bearer";
-        return result;
+        return await _loginClient.LoginAsync(account, authData, config, cancellationToken);
     }
 }

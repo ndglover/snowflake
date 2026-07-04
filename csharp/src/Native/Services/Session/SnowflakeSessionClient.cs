@@ -59,7 +59,7 @@ internal sealed class SnowflakeSessionClient(
     {
         var executor = new QueryExecutor(
             new RestApiClient(_httpClient, config.EnableCompression),
-            new TypeConverter(),
+            TypeConverter.Shared,
             config.Account,
             config.Network,
             _loggerFactory.CreateLogger<QueryExecutor>());

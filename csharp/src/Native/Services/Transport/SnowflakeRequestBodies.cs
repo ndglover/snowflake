@@ -57,7 +57,16 @@ internal sealed class SnowflakeQueryRequestBody
 /// </summary>
 internal sealed record SnowflakeBinding(
     [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("value")] object? Value);
+    [property: JsonPropertyName("value")] string? Value);
+
+/// <summary>
+/// An intentionally empty request body (e.g. the heartbeat POST), typed so the source-generated
+/// serializer can handle it without falling back to <c>object</c>.
+/// </summary>
+internal sealed class EmptyRequestBody
+{
+    internal static readonly EmptyRequestBody Instance = new();
+}
 
 /// <summary>
 /// Request body for cancelling a running query. Snowflake aborts by the <c>requestId</c> the

@@ -31,11 +31,6 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal class AuthenticationToken
 {
     /// <summary>
-    /// Gets or sets the JWT access token.
-    /// </summary>
-    public string AccessToken { get; set; } = string.Empty;
-
-    /// <summary>
     /// Gets or sets when the <b>session</b> token expires (~1h). Once past, a query gets GS
     /// <c>390112</c> and the session is renewed from the master token; so this is informational,
     /// not a hard wall.
@@ -48,11 +43,6 @@ internal class AuthenticationToken
     /// a session-expired-but-master-alive connection is still usable via renewal.
     /// </summary>
     public DateTimeOffset MasterExpiresAt { get; set; }
-
-    /// <summary>
-    /// Gets or sets the token type (typically "Bearer").
-    /// </summary>
-    public string TokenType { get; set; } = "Bearer";
 
     /// <summary>
     /// Gets or sets the session token (if available).

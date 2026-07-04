@@ -69,9 +69,9 @@ public class QueryExecutorHeartbeatTests
         var authToken = CreateToken();
 
         _apiClient
-            .PostAsync<object, SnowflakeQueryResponse>(
+            .PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
                 Arg.Is<string>(e => e.Contains("/session/heartbeat")),
-                Arg.Any<object>(),
+                Arg.Any<EmptyRequestBody>(),
                 Arg.Is(authToken),
                 Arg.Any<CancellationToken>())
             .Returns(new ApiResponse<SnowflakeQueryResponse> { Success = true });
@@ -79,9 +79,9 @@ public class QueryExecutorHeartbeatTests
         await _sut.HeartbeatAsync(authToken, CancellationToken.None);
 
         // No exception means success; verify the heartbeat endpoint was called exactly once.
-        await _apiClient.Received(1).PostAsync<object, SnowflakeQueryResponse>(
+        await _apiClient.Received(1).PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
             Arg.Is<string>(e => e.Contains("/session/heartbeat")),
-            Arg.Any<object>(),
+            Arg.Any<EmptyRequestBody>(),
             Arg.Any<AuthenticationToken>(),
             Arg.Any<CancellationToken>());
     }
@@ -93,9 +93,9 @@ public class QueryExecutorHeartbeatTests
 
         // First call: heartbeat returns session-expired
         _apiClient
-            .PostAsync<object, SnowflakeQueryResponse>(
+            .PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
                 Arg.Is<string>(e => e.Contains("/session/heartbeat")),
-                Arg.Any<object>(),
+                Arg.Any<EmptyRequestBody>(),
                 Arg.Any<AuthenticationToken>(),
                 Arg.Any<CancellationToken>())
             .Returns(new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "390112" });
@@ -138,9 +138,9 @@ public class QueryExecutorHeartbeatTests
         var authToken = CreateToken(masterToken: null);
 
         _apiClient
-            .PostAsync<object, SnowflakeQueryResponse>(
+            .PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
                 Arg.Is<string>(e => e.Contains("/session/heartbeat")),
-                Arg.Any<object>(),
+                Arg.Any<EmptyRequestBody>(),
                 Arg.Any<AuthenticationToken>(),
                 Arg.Any<CancellationToken>())
             .Returns(new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "390112" });
@@ -162,9 +162,9 @@ public class QueryExecutorHeartbeatTests
         var authToken = CreateToken();
 
         _apiClient
-            .PostAsync<object, SnowflakeQueryResponse>(
+            .PostAsync<EmptyRequestBody, SnowflakeQueryResponse>(
                 Arg.Is<string>(e => e.Contains("/session/heartbeat")),
-                Arg.Any<object>(),
+                Arg.Any<EmptyRequestBody>(),
                 Arg.Any<AuthenticationToken>(),
                 Arg.Any<CancellationToken>())
             .Returns(new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "999999" });

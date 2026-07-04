@@ -48,6 +48,7 @@ public class PooledConnectionTests
         };
         var connection = new PooledConnection(
             "id",
+            "pool-key",
             token,
             new ConnectionConfig { Account = "test" },
             sessionLifecycle: null,

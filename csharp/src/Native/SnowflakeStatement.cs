@@ -65,7 +65,7 @@ public sealed class SnowflakeStatement : AdbcStatement
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _pooledConnection = pooledConnection ?? throw new ArgumentNullException(nameof(pooledConnection));
         _queryExecutor = queryExecutor ?? throw new ArgumentNullException(nameof(queryExecutor));
-        _typeConverter = new TypeConverter();
+        _typeConverter = TypeConverter.Shared;
     }
 
     /// <summary>
@@ -133,12 +133,7 @@ public sealed class SnowflakeStatement : AdbcStatement
 
             // Check for query execution failures
             if (result.Status == QueryStatus.Failed)
-            {
-                var errorMessages = result.Errors.Count > 0
-                    ? string.Join("; ", result.Errors.ConvertAll(e => $"[{e.ErrorCode}] {e.Message}"))
-                    : "Unknown error";
-                throw new AdbcException($"Query failed: {errorMessages}");
-            }
+                throw ToAdbcException("Query failed", result);
 
             if (result.ResultStream == null)
             {
@@ -209,12 +204,7 @@ public sealed class SnowflakeStatement : AdbcStatement
             var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
 
             if (result.Status == QueryStatus.Failed)
-            {
-                var errorMessages = result.Errors.Count > 0
-                    ? string.Join("; ", result.Errors.ConvertAll(e => $"[{e.ErrorCode}] {e.Message}"))
-                    : "Unknown error";
-                throw new AdbcException($"Update failed: {errorMessages}");
-            }
+                throw ToAdbcException("Update failed", result);
 
             // A statement that produces a result set (e.g. SELECT) affects no rows, so report
             // -1 (unknown/not applicable) per the ADBC contract. DML statements report their
@@ -261,6 +251,21 @@ public sealed class SnowflakeStatement : AdbcStatement
         var requestId = Guid.NewGuid().ToString();
         _currentRequestId = requestId;
         return requestId;
+    }
+
+    /// <summary>
+    /// Builds the failure exception from a failed result, carrying the originating exception as the
+    /// inner exception (when there was one) so the full stack survives instead of just its message.
+    /// </summary>
+    private static AdbcException ToAdbcException(string prefix, Services.Query.QueryResult result)
+    {
+        var errorMessages = result.Errors.Count > 0
+            ? string.Join("; ", result.Errors.ConvertAll(e => $"[{e.ErrorCode}] {e.Message}"))
+            : "Unknown error";
+        var cause = result.Errors.Find(e => e.Exception != null)?.Exception;
+        return cause is null
+            ? new AdbcException($"{prefix}: {errorMessages}")
+            : new AdbcException($"{prefix}: {errorMessages}", cause);
     }
 
     /// <summary>

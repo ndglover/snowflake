@@ -114,12 +114,17 @@ internal class TypeConverter : ITypeConverter
     public ParameterSet ConvertArrowBatchToParameters(RecordBatch batch)
     {
         ArgumentNullException.ThrowIfNull(batch);
+        
+        if (batch.Length > 1)
+            throw new NotSupportedException(
+                $"Multi-row parameter batches are not supported (got {batch.Length} rows). " +
+                "Bind a single-row batch per execution.");
 
         var parameters = new Dictionary<string, SnowflakeBinding>();
 
-        if (batch.Length <= 0) 
+        if (batch.Length <= 0)
             return new ParameterSet { Parameters = parameters };
-        
+
         for (var i = 0; i < batch.Schema.FieldsList.Count; i++)
         {
             // Snowflake binds '?' placeholders positionally: each column is the parameter

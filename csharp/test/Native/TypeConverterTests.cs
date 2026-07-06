@@ -209,6 +209,19 @@ public class TypeConverterTests
     }
 
     [Fact]
+    public void ConvertArrowBatchToParameters_MultiRowBatch_ThrowsInsteadOfDroppingRows()
+    {
+        // Array binding (executemany) isn't implemented; a multi-row batch must fail loudly
+        // rather than silently binding row 0 and losing the rest.
+        var schema = new Schema([new Field("p", Int64Type.Default, true)], null);
+        var values = new Int64Array.Builder().Append(1).Append(2).Build();
+        using var batch = new RecordBatch(schema, [values], 2);
+
+        var ex = Assert.Throws<NotSupportedException>(() => _converter.ConvertArrowBatchToParameters(batch));
+        Assert.Contains("Multi-row", ex.Message);
+    }
+
+    [Fact]
     public void ConvertArrowBatchToParameters_UnsupportedArrowType_Throws()
     {
         // An untyped null column can't be bound to a Snowflake type — throw rather than guess.

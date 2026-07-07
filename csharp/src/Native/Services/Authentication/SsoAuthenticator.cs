@@ -68,10 +68,10 @@ internal class SsoAuthenticator : ISsoAuthenticator
             throw new ArgumentException("User cannot be null or empty.", nameof(user));
 
         // Step 1: Get SSO URL from Snowflake
-        var ssoUrl = await GetSsoUrlAsync(account, user, cancellationToken);
+        var ssoUrl = await GetSsoUrlAsync(account, user, cancellationToken).ConfigureAwait(false);
 
         // Step 2: Open browser for user authentication
-        var samlResponse = await AuthenticateWithBrowserAsync(ssoUrl, cancellationToken);
+        var samlResponse = await AuthenticateWithBrowserAsync(ssoUrl, cancellationToken).ConfigureAwait(false);
 
         // Step 3: Complete authentication with SAML response
         var authData = new LoginRequestData
@@ -81,7 +81,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
             RAW_SAML_RESPONSE = samlResponse
         };
 
-        return await _loginClient.LoginAsync(account, authData, null, cancellationToken);
+        return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string> GetSsoUrlAsync(
@@ -109,10 +109,10 @@ internal class SsoAuthenticator : ISsoAuthenticator
 
         try
         {
-            var response = await _httpClient.PostAsJsonAsync(authenticatorUrl, authenticatorRequest, cancellationToken);
+            var response = await _httpClient.PostAsJsonAsync(authenticatorUrl, authenticatorRequest, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            var responseContent = await response.Content.ReadFromJsonAsync<AuthenticatorResponse>(cancellationToken);
+            var responseContent = await response.Content.ReadFromJsonAsync<AuthenticatorResponse>(cancellationToken).ConfigureAwait(false);
 
             if (responseContent?.Data?.SsoUrl == null)
                 throw new AdbcException("Failed to retrieve SSO URL from Snowflake.");
@@ -141,7 +141,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
             listener.Start();
             OpenBrowser(ssoUrl);
 
-            var context = await listener.GetContextAsync();
+            var context = await listener.GetContextAsync().ConfigureAwait(false);
             var samlResponse = context.Request.QueryString["SAMLResponse"];
 
             if (string.IsNullOrEmpty(samlResponse))
@@ -151,7 +151,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
                 "<html><body><h1>Authentication Successful</h1><p>You can close this window.</p></body></html>");
             context.Response.ContentType = "text/html";
             context.Response.ContentLength64 = responseBytes.Length;
-            await context.Response.OutputStream.WriteAsync(responseBytes, cancellationToken);
+            await context.Response.OutputStream.WriteAsync(responseBytes, cancellationToken).ConfigureAwait(false);
             context.Response.Close();
 
             return samlResponse;

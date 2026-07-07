@@ -113,7 +113,7 @@ internal class RestApiClient : IRestApiClient
             response.EnsureSuccessStatusCode();
 
             return await ReadApiResponseAsync<TResponse>(response, cancellationToken).ConfigureAwait(false);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -160,7 +160,7 @@ internal class RestApiClient : IRestApiClient
             // The response is deliberately not disposed: the caller owns the returned live body
             // stream, and disposing the stream releases the connection.
             return await GetResponseStreamAsync(response, cancellationToken).ConfigureAwait(false);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     void AddCompressionHeadersIfEnabled(HttpRequestMessage request)

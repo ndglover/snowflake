@@ -83,10 +83,10 @@ internal class AuthenticationService : IAuthenticationService
         // Route to appropriate authenticator with type-specific parameter validation
         return authConfig.Type switch
         {
-            AuthenticationType.UsernamePassword => await AuthenticateWithPassword(account, user, authConfig, connectionConfig, cancellationToken),
-            AuthenticationType.KeyPair => await AuthenticateWithKeyPair(account, user, authConfig, cancellationToken),
-            AuthenticationType.OAuth => await _oauthAuth.AuthenticateAsync(account, authConfig.OAuthToken!, connectionConfig, cancellationToken),
-            AuthenticationType.Sso or AuthenticationType.ExternalBrowser => await AuthenticateWithSso(account, user, authConfig, cancellationToken),
+            AuthenticationType.UsernamePassword => await AuthenticateWithPassword(account, user, authConfig, connectionConfig, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.KeyPair => await AuthenticateWithKeyPair(account, user, authConfig, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.OAuth => await _oauthAuth.AuthenticateAsync(account, authConfig.OAuthToken!, connectionConfig, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.Sso or AuthenticationType.ExternalBrowser => await AuthenticateWithSso(account, user, authConfig, cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException($"Authentication type {authConfig.Type} is not supported.")
         };
     }
@@ -98,7 +98,7 @@ internal class AuthenticationService : IAuthenticationService
         if (string.IsNullOrEmpty(user))
             throw new ArgumentException("User is required for username/password authentication.", nameof(user));
 
-        return await _basicAuth.AuthenticateAsync(account, user, authConfig.Password!, connectionConfig, cancellationToken);
+        return await _basicAuth.AuthenticateAsync(account, user, authConfig.Password!, connectionConfig, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AuthenticationToken> AuthenticateWithKeyPair(
@@ -109,7 +109,7 @@ internal class AuthenticationService : IAuthenticationService
             throw new ArgumentException("User is required for key pair authentication.", nameof(user));
 
         var privateKey = authConfig.PrivateKeyPath ?? authConfig.PrivateKey!;
-        return await _keyPairAuth.AuthenticateAsync(account, user, privateKey, authConfig.PrivateKeyPassphrase, cancellationToken);
+        return await _keyPairAuth.AuthenticateAsync(account, user, privateKey, authConfig.PrivateKeyPassphrase, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AuthenticationToken> AuthenticateWithSso(
@@ -119,6 +119,6 @@ internal class AuthenticationService : IAuthenticationService
         if (string.IsNullOrEmpty(user))
             throw new ArgumentException("User is required for SSO authentication.", nameof(user));
 
-        return await _ssoAuth.AuthenticateAsync(account, user, authConfig.SsoProperties, cancellationToken);
+        return await _ssoAuth.AuthenticateAsync(account, user, authConfig.SsoProperties, cancellationToken).ConfigureAwait(false);
     }
 }

@@ -78,6 +78,6 @@ internal class BasicAuthenticator : IBasicAuthenticator
             PASSWORD = password
         };
 
-        return await _loginClient.LoginAsync(account, authData, config, cancellationToken);
+        return await _loginClient.LoginAsync(account, authData, config, cancellationToken).ConfigureAwait(false);
     }
 }

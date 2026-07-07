@@ -69,7 +69,7 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
         if (!File.Exists(privateKeyPath))
             throw new FileNotFoundException($"Private key file not found: {privateKeyPath}");
 
-        var privateKeyPem = await File.ReadAllTextAsync(privateKeyPath, cancellationToken);
+        var privateKeyPem = await File.ReadAllTextAsync(privateKeyPath, cancellationToken).ConfigureAwait(false);
         var jwtToken = GenerateJwtToken(account, user, privateKeyPem, privateKeyPassphrase);
 
         var authData = new LoginRequestData
@@ -79,7 +79,7 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             TOKEN = jwtToken
         };
 
-        return await _loginClient.LoginAsync(account, authData, null, cancellationToken);
+        return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
     }
 
     private static string GenerateJwtToken(string account, string user, string privateKeyPem, string? passphrase)

@@ -133,6 +133,53 @@ the master token when a query hits expiry; with `keep_session_alive` enabled, id
 connections are heartbeated in the background so the ~4 h master window rolls forward
 indefinitely. Server-side sessions are closed when the pool discards a connection.
 
+## Testing
+
+The suite is split by xUnit trait so the offline half runs anywhere (including CI) with no
+Snowflake account:
+
+| Category | What it covers | Requires |
+|---|---|---|
+| `Unit` (~150 tests) | Offline: type mapping and bind wire formats, option parsing, pool scheduling (deterministic via an injected `TimeProvider`/fake clock), chunk-prefetch back-pressure (fake HTTP client serving in-memory Arrow), result-decode fixups, request-body construction | Nothing |
+| `Integration` (~77 tests) | Live against a real account: connect/lifecycle, statements + binds + cancellation, the wire type-decode matrix (`SELECT <literal>` per type), metadata/`GetObjects` content checks against `SNOWFLAKE_SAMPLE_DATA` (TPC-H), the ADO.NET client layer, session renewal + heartbeat | `SNOWFLAKE_TEST_CONFIG_FILE` → JSON config (account, credentials, warehouse; a **writable** database/schema for the DML and client tests) |
+
+```bash
+dotnet test csharp/test/Native --filter "Category=Unit"
+SNOWFLAKE_TEST_CONFIG_FILE=/path/to/config.json dotnet test csharp/test/Native --filter "Category=Integration"
+```
+
+Per-file breakdown: [test suite readme](../../../test/Native/readme.md). A long-running console
+harness (`csharp/tools/SessionHarness`) exists for multi-hour session-lifecycle validation
+(token renewal and keep-alive heartbeats were verified over 6–13 h live runs with it).
+
+## Performance
+
+Benchmarked head-to-head against the Go driver (loaded via the Interop package) using an
+**identical harness** — same query, same row limits, measuring execute + drain of every Arrow
+batch (`BenchmarkTests` in both test suites; `csharp/run_benchmark.ps1` automates the
+comparison).
+
+Representative results (5-run means, 2026-07-06, Release/net8.0):
+
+| Rows fetched | Native C# | Interop (Go) | Native / Interop |
+|---|---|---|---|
+| 100 | 144 ms | 78 ms | 1.84× |
+| 1,000 | 206 ms | 296 ms | 0.70× |
+| 1,000,000 (191 Arrow chunks) | 2,491 ms | 2,912 ms | **0.86×** |
+
+At scale the native driver runs at parity or ahead of the Go driver (bounded parallel chunk
+prefetch, pre-sized buffers, per-column decode loops); the small-query gap is
+connection-establishment overhead, not the data path.
+
+**Environment:** Intel Core Ultra 9 285H (16 cores / 16 threads), 32 GB RAM, Windows 11,
+.NET 8 Release; internet downlink measured at ~200–240 Mbps at benchmark time (50 MB probe
+transfers); default warehouse. Wall-clock over a live network varies heavily between runs — the
+*unchanged* Go driver swung 2.0–2.9 s across a single day — so all comparisons use interleaved
+native/interop runs and multi-run means, never cross-session absolutes. Full protocol and
+history: [benchmark-results.md](benchmark-results.md); a plain-language account of the
+optimizations behind these numbers:
+[perf-explainer-2026-07-01.md](perf-explainer-2026-07-01.md).
+
 ## Known limitations
 
 Tracked in [TODO.md](TODO.md) with the full backlog:

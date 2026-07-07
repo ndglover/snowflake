@@ -203,6 +203,45 @@ pool-waiter wakeup.
 
 ---
 
+## 4b. Sync-over-async / deadlock review (2026-07-06)
+
+The ADBC surface is sync-first (`Connect`, `ExecuteQuery`, `GetObjects`, `Dispose`) over a fully
+async core, so every public sync call blocks a thread on async work. Audit of all 10 blocking
+sites + every `await` in the driver:
+
+**Fixed — real deadlock:** the entire **login/auth path had no `ConfigureAwait(false)`**
+(~20 awaits: `AuthenticationService`, all four authenticators, `SnowflakeLoginClient.LoginAsync`).
+A consumer calling the sync `database.Connect()` on a UI thread (WinForms/WPF `SynchronizationContext`)
+would deadlock **permanently**: the continuation posts to the blocked context, and even
+`HttpClient`'s timeout can't rescue it because propagating the timeout exception itself needs the
+blocked context. Worst case was `externalbrowser` auth: `HttpListener.GetContextAsync()` (no CA,
+no cancellation) → sync `Connect()` on a UI thread hangs forever waiting for a browser callback it
+can never process. All awaits are now `ConfigureAwait(false)`; also swept `ConnectionPoolManager`
+(`CreateConnectionAsync`, the `PeriodicTimer` tick), `RestApiClient`'s outer retry awaits, and the
+chunk stream's dispose paths. Verified: no unconfigured `await` remains in `src/Native`.
+
+**Fixed — lock held over network I/O:** `TryAcquireIdleConnection` disposed stale connections
+**inside `poolEntry.IdleLock`**, and `PooledConnection.Dispose` does a bounded 5s network wait
+(best-effort session close) — so one stale connection could stall every acquire/release on that
+pool entry for up to 5s each. Stale connections are now collected under the lock and disposed
+after it (the pattern `Cleanup()` already used). No code path holds two locks at once, so no
+lock-ordering deadlock is possible.
+
+**Verified safe (by design):**
+- The sync wrappers (`Connect`, `ExecuteQuery`/`ExecuteUpdate`/`Cancel`, `GetTableSchema`,
+  `RunMetadataQuery`) block one thread but cannot deadlock now the full chain is CA(false).
+  (Note: `task.ConfigureAwait(false).GetAwaiter().GetResult()` at two call sites is cosmetic — the
+  CA there does nothing; it's the *inner* chain that protects.)
+- `ChunkedArrowArrayStream.Dispose` sync-joins the prefetch task, but the task runs on the thread
+  pool (`Task.Run`), is fully CA(false), and is unblocked by `_cts.Cancel()` — no context coupling.
+- `ConnectionPoolManager.Dispose` / `PooledConnection.Dispose` waits are time-bounded (5s).
+- `_renewLock` (async semaphore) is held across the renewal HTTP call by design (serializes
+  renewals); it never nests with pool locks.
+
+**Accepted residual risks (inherent to a sync API over async I/O):** each sync call burns a
+blocked thread → bursty sync usage can transiently starve the thread pool (prefer the async APIs);
+and the SSO listener's missing cancellation (now tracked in TODO.md under the SSO item).
+
 ## 5. Order of attack — ✅ ALL STEPS COMPLETE (2026-07-01)
 
 1. ✅ **Dead-code sweep** (D1–D8, D10 + extras; D9/D11 in step 6): ~950 lines gone.

@@ -5,6 +5,9 @@ Supersedes the 2026-06-19 baseline (which predated chunk prefetching).
 
 ## Setup
 
+- **Hardware:** Intel Core Ultra 9 285H (16 cores / 16 threads), 32 GB RAM, Windows 11.
+- **Network:** internet downlink measured at ~200–240 Mbps (50 MB probe transfers via a CDN speed
+  endpoint, measured 2026-07-07); default warehouse.
 - **Query:** configured via `query` in the config JSON; result set has **8 columns**.
 - **Build:** .NET 8.0, **Release**, `net8.0` target for both drivers (apples-to-apples).
 - **Go driver:** loaded via the Interop CGo wrapper (`driverPath` in config).
@@ -42,6 +45,21 @@ Supersedes the 2026-06-19 baseline (which predated chunk prefetching).
 | 100 | 208 ms | 192 ms (~98 median) | Interop / ~equal |
 | 1,000 | 240 ms | 245 ms | ~equal |
 | 1,000,000 | 2,531 ms | 2,300 ms | Interop (~9% faster) |
+
+## Update 2026-07-06 — after the full performance pass
+
+Re-measured (5-run means) after the decode-loop rewrite, prefetch back-pressure fix, stream JSON
+deserialization, and source-generated serializer landed:
+
+| Rows | Native avg | Interop avg | Native / Interop |
+|------|-----------|-------------|------------------|
+| 100 | 144 ms | 78 ms | 1.84× |
+| 1,000 | 206 ms | 296 ms | **0.70×** |
+| 1,000,000 | 2,491 ms | 2,912 ms | **0.86×** |
+
+Native now leads at 1,000 and 1,000,000 rows; the 100-row gap is connection-establishment
+overhead (login handshake), not the data path. These supersede the 2026-07-01 tables below for
+"current state"; the older tables remain as the pre-optimization record.
 
 ## Key findings
 

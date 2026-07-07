@@ -87,10 +87,10 @@ internal class SnowflakeLoginClient
 
         try
         {
-            var response = await _httpClient.PostAsJsonAsync(loginUrl, loginRequest, cancellationToken);
+            var response = await _httpClient.PostAsJsonAsync(loginUrl, loginRequest, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            var responseContent = await response.Content.ReadFromJsonAsync<LoginResponse>(cancellationToken);
+            var responseContent = await response.Content.ReadFromJsonAsync<LoginResponse>(cancellationToken).ConfigureAwait(false);
 
             if (responseContent?.Data == null)
                 throw new AdbcException("Invalid response from Snowflake authentication service.");

@@ -104,7 +104,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                 return connection!;
             }
 
-            var newConnection = await CreateConnectionAsync(poolKey, config, cancellationToken);
+            var newConnection = await CreateConnectionAsync(poolKey, config, cancellationToken).ConfigureAwait(false);
             poolEntry.ActiveConnections.TryAdd(newConnection.ConnectionId, newConnection);
             Interlocked.Increment(ref _totalConnectionsCreated);
             return newConnection;
@@ -156,6 +156,9 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private bool TryAcquireIdleConnection(ConnectionPoolEntry poolEntry, out IPooledConnection? idleConnection)
     {
         var now = _timeProvider.GetUtcNow();
+        List<IPooledConnection>? stale = null;
+        idleConnection = null;
+
         lock (poolEntry.IdleLock)
         {
             while (poolEntry.IdleConnections.TryPop(out var connection))
@@ -166,17 +169,27 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                     poolEntry.ActiveConnections.TryAdd(connection.ConnectionId, connection);
                     Interlocked.Increment(ref _totalConnectionReuses);
                     idleConnection = connection;
-                    return true;
+                    break;
                 }
 
+                (stale ??= []).Add(connection);
+            }
+        }
+
+        // Dispose OUTSIDE the lock: Dispose best-effort closes the server-side session — a bounded
+        // network wait — and holding IdleLock across it would stall every other acquire/release on
+        // this pool entry for up to 5s per stale connection.
+        if (stale != null)
+        {
+            foreach (var connection in stale)
+            {
                 connection.Dispose();
                 poolEntry.CapacitySemaphore.Release();
                 Interlocked.Increment(ref _totalConnectionsClosed);
             }
         }
 
-        idleConnection = null;
-        return false;
+        return idleConnection != null;
     }
 
     public void ReleaseConnection(IPooledConnection connection)
@@ -257,7 +270,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         CancellationToken token = _cleanupCts.Token;
         try
         {
-            while (await timer.WaitForNextTickAsync(token))
+            while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
                 try
                 {

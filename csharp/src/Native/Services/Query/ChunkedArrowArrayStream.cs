@@ -142,7 +142,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
                     catch
                     {
                         // The consumer never received it; it is ours to clean up.
-                        await chunk.Stream.DisposeAsync();
+                        await chunk.Stream.DisposeAsync().ConfigureAwait(false);
                         throw;
                     }
                 }
@@ -168,7 +168,7 @@ internal sealed class ChunkedArrowArrayStream : Ipc.IArrowArrayStream
                 // exceptions don't go unobserved.
                 while (window.Count > 0)
                 {
-                    try { await (await window.Dequeue().ConfigureAwait(false)).Stream.DisposeAsync(); }
+                    try { await (await window.Dequeue().ConfigureAwait(false)).Stream.DisposeAsync().ConfigureAwait(false); }
                     catch { /* cancelled or failed download -- nothing to dispose */ }
                 }
             }

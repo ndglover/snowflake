@@ -52,7 +52,8 @@ public class QueryExecutorHeartbeatTests
             _typeConverter,
             "testaccount",
             network: null,
-            NullLogger<QueryExecutor>.Instance);
+            NullLogger<QueryExecutor>.Instance,
+            onConnectionFault: static () => { });
     }
 
     private static AuthenticationToken CreateToken(string? masterToken = "master-token-123") =>

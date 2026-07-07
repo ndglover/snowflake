@@ -89,12 +89,9 @@ internal interface IPooledConnection : IDisposable
     bool IsTokenExpired { get; }
 
     /// <summary>
-    /// Gets a value indicating whether the connection is faulted.
+    /// Gets or sets a value indicating whether the connection is faulted (its session is unusable
+    /// or in an unknown state), so the pool discards it on release instead of reusing it.
+    /// Set-once: there is no un-faulting a connection.
     /// </summary>
-    bool IsFaulted { get; }
-
-    /// <summary>
-    /// Marks the connection as faulted.
-    /// </summary>
-    void MarkFaulted();
+    bool IsFaulted { get; internal set; }
 }

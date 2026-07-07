@@ -46,6 +46,7 @@ internal class QueryExecutor : IQueryExecutor
     private readonly ITypeConverter _typeConverter;
     private readonly string _accountUrl;
     private readonly ILogger<QueryExecutor> _logger;
+    private readonly Action _onConnectionFault;
     // Serializes session renewal on this connection so concurrent statements don't double-renew.
     private readonly SemaphoreSlim _renewLock = new(1, 1);
     private const string QueryEndpoint = "/queries/v1/query-request";
@@ -56,6 +57,10 @@ internal class QueryExecutor : IQueryExecutor
     // GS error code Snowflake returns when the session token has expired.
     const string SessionExpiredCode = "390112";
 
+    // GS error code Snowflake returns when the master token has also expired; the session cannot
+    // be recovered by renewal — the user must authenticate again.
+    const string MasterTokenExpiredCode = "390114";
+
     /// <summary>
     /// Initializes a new instance of the <see cref="QueryExecutor"/> class.
     /// </summary>
@@ -64,21 +69,30 @@ internal class QueryExecutor : IQueryExecutor
     /// <param name="account">The Snowflake account identifier.</param>
     /// <param name="network">The network configuration.</param>
     /// <param name="logger">The ILogger instance for logging.</param>
+    /// <param name="onConnectionFault">
+    /// Invoked when a failure leaves the session unusable or in an unknown state — a transport-level
+    /// error mid-request, a failed renewal, or a session-fatal GS code — so the owner (the pooled
+    /// connection) can be flagged for discard instead of being reused. Ordinary SQL errors and
+    /// caller cancellations do not trigger it.
+    /// </param>
     public QueryExecutor(
         IRestApiClient apiClient,
         ITypeConverter typeConverter,
         string account,
         Configuration.NetworkConfig? network,
-        ILogger<QueryExecutor> logger)
+        ILogger<QueryExecutor> logger,
+        Action onConnectionFault)
     {
         ArgumentNullException.ThrowIfNull(apiClient);
         ArgumentNullException.ThrowIfNull(typeConverter);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(onConnectionFault);
         ArgumentException.ThrowIfNullOrEmpty(account);
 
         _apiClient = apiClient;
         _typeConverter = typeConverter;
         _logger = logger;
+        _onConnectionFault = onConnectionFault;
 
         _accountUrl = SnowflakeAccountUrl.Build(account, network);
     }
@@ -336,10 +350,50 @@ internal class QueryExecutor : IQueryExecutor
     }
 
     /// <summary>
-    /// Posts a query/describe request and, if Snowflake reports the session token has expired,
-    /// renews it with the master token and retries the request once (with a fresh request id).
+    /// Posts a query/describe request (renewing an expired session token and retrying once — see
+    /// <see cref="PostQueryCoreAsync"/>) and classifies any failure for the pool: outcomes that leave
+    /// the session unusable or in an unknown state fault the pooled connection so it is discarded
+    /// instead of reused; a caller cancellation or an ordinary statement error does not.
     /// </summary>
     private async Task<ApiResponse<SnowflakeQueryResponse>> PostQueryWithRenewalAsync(
+        QueryRequest request, bool describeOnly, AuthenticationToken authToken, CancellationToken cancellationToken)
+    {
+        ApiResponse<SnowflakeQueryResponse> response;
+        try
+        {
+            response = await PostQueryCoreAsync(request, describeOnly, authToken, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller cancelled; the session itself is still good.
+            throw;
+        }
+        catch
+        {
+            // A transport-level failure (network error, timeout, malformed response) or a failed
+            // renewal: the session's state is unknown or unusable, so the pooled connection must
+            // not be handed to the next caller.
+            _onConnectionFault();
+            throw;
+        }
+
+        // The session is fatally rejected: 390112 that couldn't be renewed (no master token, or the
+        // renewed token was rejected again on retry), or 390114 (master token expired too).
+        if (!IsSessionFatal(response)) 
+            return response;
+        
+        _logger.LogDebug("Snowflake session is unrecoverable (code {Code}); faulting the connection.", response.Code);
+        _onConnectionFault();
+
+        return response;
+    }
+
+    /// <summary>
+    /// Posts the query/describe request; on a session-expired response (390112) it renews the
+    /// session token with the master token and retries once, rebuilding the request with a fresh
+    /// request id so the retry is not treated as a duplicate of the rejected attempt.
+    /// </summary>
+    private async Task<ApiResponse<SnowflakeQueryResponse>> PostQueryCoreAsync(
         QueryRequest request, bool describeOnly, AuthenticationToken authToken, CancellationToken cancellationToken)
     {
         var body = BuildQueryRequest(request, out string endpoint, describeOnly);
@@ -355,8 +409,6 @@ internal class QueryExecutor : IQueryExecutor
         _logger.LogDebug("Snowflake session token expired (code {Code}); renewing and retrying.", response.Code);
         await RenewSessionCoreAsync(authToken, renewIfSessionTokenIs: tokenUsed, cancellationToken).ConfigureAwait(false);
 
-        // Rebuild with a fresh request id so the retry is not treated as a duplicate of the
-        // request that was rejected for the expired token.
         body = BuildQueryRequest(request, out endpoint, describeOnly);
         return await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
             endpoint, body, authToken, cancellationToken).ConfigureAwait(false);
@@ -367,6 +419,16 @@ internal class QueryExecutor : IQueryExecutor
     /// </summary>
     internal static bool IsSessionExpired(ApiResponse<SnowflakeQueryResponse> response) =>
         response is { Success: false } && string.Equals(response.Code, SessionExpiredCode, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when a response indicates the session can no longer authenticate requests: the session
+    /// token is expired (390112 — fatal here because renewal was either impossible or has already
+    /// been attempted) or the master token is expired (390114).
+    /// </summary>
+    static bool IsSessionFatal(ApiResponse<SnowflakeQueryResponse> response) =>
+        response is { Success: false } &&
+        (string.Equals(response.Code, SessionExpiredCode, StringComparison.Ordinal) ||
+         string.Equals(response.Code, MasterTokenExpiredCode, StringComparison.Ordinal));
 
     /// <summary>
     /// Renews an expired session token in place via <c>/session/token-request</c>. Snowflake issues
@@ -436,7 +498,12 @@ internal class QueryExecutor : IQueryExecutor
                 endpoint, body, masterAuth, cancellationToken).ConfigureAwait(false);
 
             if (!response.Success || string.IsNullOrEmpty(response.Data?.SessionToken))
+            {
+                // The server rejected the renewal, so the session cannot authenticate any further
+                // requests — flag the pooled connection so it is discarded rather than reused.
+                _onConnectionFault();
                 throw new AdbcException($"Failed to renew the Snowflake session token (code {response.Code ?? "unknown"}).");
+            }
 
             authToken.SessionToken = response.Data.SessionToken;
             if (!string.IsNullOrEmpty(response.Data.MasterToken))

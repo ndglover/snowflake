@@ -62,7 +62,11 @@ internal sealed class SnowflakeSessionClient(
             TypeConverter.Shared,
             config.Account,
             config.Network,
-            _loggerFactory.CreateLogger<QueryExecutor>());
+            _loggerFactory.CreateLogger<QueryExecutor>(),
+            // This executor serves the pool's own idle heartbeats, not a checked-out connection, so
+            // there is no connection to fault: the pool swallows a failed heartbeat and the session
+            // recovers via reactive renewal on the next query.
+            onConnectionFault: static () => { });
         return executor.HeartbeatAsync(token, cancellationToken);
     }
 

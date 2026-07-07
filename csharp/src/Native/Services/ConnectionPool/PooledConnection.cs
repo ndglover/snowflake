@@ -92,9 +92,7 @@ internal class PooledConnection : IPooledConnection
     // once it's truly beyond recovery. Evaluated on the pool's clock so all pool timekeeping shares one.
     public bool IsTokenExpired => _timeProvider.GetUtcNow() >= AuthToken.MasterExpiresAt;
 
-    public bool IsFaulted { get; private set; }
-
-    public void MarkFaulted() => IsFaulted = true;
+    public bool IsFaulted { get; set; }
 
     /// <summary>
     /// Updates the last used timestamp (internal use only).

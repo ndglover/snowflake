@@ -51,8 +51,7 @@ public class ConnectionPoolManagerTests
         public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
         public bool IsDisposed { get; init; }
         public bool IsTokenExpired => false;
-        public bool IsFaulted => false;
-        public void MarkFaulted() { }
+        public bool IsFaulted { get; set; }
         void IPooledConnection.UpdateLastUsedAt() { }
         void IPooledConnection.RecordHeartbeat()
         {
@@ -371,6 +370,36 @@ public class ConnectionPoolManagerTests
         // The second acquire finds the pool at capacity and times out instead of hanging forever.
         var ex = await Assert.ThrowsAsync<AdbcException>(() => pool.AcquireConnectionAsync(config));
         Assert.Contains("capacity", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReleaseConnection_WhenFaulted_DiscardsInsteadOfPooling()
+    {
+        var authService = Substitute.For<IAuthenticationService>();
+        authService.AuthenticateAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
+            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new AuthenticationToken
+            {
+                SessionToken = "session",
+                MasterToken = "master",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddHours(4),
+            });
+
+        using var pool = new ConnectionPoolManager(authService);
+        var config = new ConnectionConfig { Account = "test", User = "user" };
+
+        // A connection marked faulted (e.g. the executor hit a transport failure mid-query) must be
+        // disposed on release, and the next acquire must get a fresh connection, not the faulted one.
+        var faulted = await pool.AcquireConnectionAsync(config);
+        faulted.IsFaulted = true;
+        pool.ReleaseConnection(faulted);
+
+        var next = await pool.AcquireConnectionAsync(config);
+
+        Assert.True(faulted.IsDisposed);
+        Assert.NotEqual(faulted.ConnectionId, next.ConnectionId);
     }
 
     // ---- GeneratePoolKey ----

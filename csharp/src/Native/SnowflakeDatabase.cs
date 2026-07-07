@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using Microsoft.Extensions.Logging;
@@ -94,13 +95,14 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     }
 
     /// <summary>
-    /// Asynchronously create a new connection to the Snowflake database.
+    /// Asynchronously create a new connection to the Snowflake database. The token cancels the
+    /// wait for pool capacity and the login round trip.
     /// </summary>
-    public async Task<AdbcConnection> ConnectAsync(IReadOnlyDictionary<string, string>? parameters)
+    public async Task<AdbcConnection> ConnectAsync(IReadOnlyDictionary<string, string>? parameters, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var config = ConnectionStringParser.ParseParameters(parameters, _parameters);
-        return await SnowflakeConnection.CreateAsync(config, _httpClient, _connectionPool, _loggerFactory).ConfigureAwait(false);
+        return await SnowflakeConnection.CreateAsync(config, _httpClient, _connectionPool, _loggerFactory, cancellationToken).ConfigureAwait(false);
     }
 
 

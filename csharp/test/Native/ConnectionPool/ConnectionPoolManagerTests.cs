@@ -373,6 +373,98 @@ public class ConnectionPoolManagerTests
     }
 
     [Fact]
+    public async Task AcquireConnection_WaiterIsWokenByReleaseToIdle()
+    {
+        // Pool of 1: a second acquire must block, then complete promptly (not after AcquireTimeout)
+        // when the first connection is released to idle — and it must reuse that connection.
+        var authService = SubstituteAuthService();
+        using var pool = new ConnectionPoolManager(authService);
+        var config = new ConnectionConfig
+        {
+            Account = "test",
+            User = "user",
+            PoolConfig = new ConnectionPoolConfig { MaxPoolSize = 1, AcquireTimeout = TimeSpan.FromSeconds(30) },
+        };
+
+        var first = await pool.AcquireConnectionAsync(config);
+        Task<IPooledConnection> waiter = pool.AcquireConnectionAsync(config);
+        await Task.Delay(200);
+        Assert.False(waiter.IsCompleted, "waiter should be blocked while the pool is at capacity");
+
+        pool.ReleaseConnection(first);
+
+        // Well under the 30s AcquireTimeout, so completion proves the release woke the waiter.
+        var second = await waiter.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(first.ConnectionId, second.ConnectionId);
+    }
+
+    [Fact]
+    public async Task AcquireConnection_WaiterIsWokenByReleaseOfFaultedConnection()
+    {
+        // A discarded (faulted) connection must also free capacity for a blocked waiter, which
+        // then creates a fresh connection.
+        var authService = SubstituteAuthService();
+        using var pool = new ConnectionPoolManager(authService);
+        var config = new ConnectionConfig
+        {
+            Account = "test",
+            User = "user",
+            PoolConfig = new ConnectionPoolConfig { MaxPoolSize = 1, AcquireTimeout = TimeSpan.FromSeconds(30) },
+        };
+
+        var first = await pool.AcquireConnectionAsync(config);
+        Task<IPooledConnection> waiter = pool.AcquireConnectionAsync(config);
+        await Task.Delay(200);
+        Assert.False(waiter.IsCompleted, "waiter should be blocked while the pool is at capacity");
+
+        first.IsFaulted = true;
+        pool.ReleaseConnection(first);
+
+        var second = await waiter.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(first.IsDisposed);
+        Assert.NotEqual(first.ConnectionId, second.ConnectionId);
+    }
+
+    [Fact]
+    public async Task ReleaseConnection_Twice_ReturnsOnlyOnePermit()
+    {
+        // Double release must be a no-op (the connection is no longer active), not a second permit:
+        // with a pool of 1, two subsequent held acquires would otherwise both succeed.
+        var authService = SubstituteAuthService();
+        using var pool = new ConnectionPoolManager(authService);
+        var config = new ConnectionConfig
+        {
+            Account = "test",
+            User = "user",
+            PoolConfig = new ConnectionPoolConfig { MaxPoolSize = 1, AcquireTimeout = TimeSpan.FromMilliseconds(200) },
+        };
+
+        var connection = await pool.AcquireConnectionAsync(config);
+        pool.ReleaseConnection(connection);
+        pool.ReleaseConnection(connection);
+
+        // One permit available: the first acquire succeeds and holds it; the second must time out.
+        _ = await pool.AcquireConnectionAsync(config);
+        await Assert.ThrowsAsync<AdbcException>(() => pool.AcquireConnectionAsync(config));
+    }
+
+    private static IAuthenticationService SubstituteAuthService()
+    {
+        var authService = Substitute.For<IAuthenticationService>();
+        authService.AuthenticateAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
+            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new AuthenticationToken
+            {
+                SessionToken = "session",
+                MasterToken = "master",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                MasterExpiresAt = DateTimeOffset.UtcNow.AddHours(4),
+            });
+        return authService;
+    }
+
+    [Fact]
     public async Task ReleaseConnection_WhenFaulted_DiscardsInsteadOfPooling()
     {
         var authService = Substitute.For<IAuthenticationService>();

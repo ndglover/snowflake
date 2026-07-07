@@ -91,18 +91,18 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         var poolKey = GeneratePoolKey(config);
         var poolEntry = _pools.GetOrAdd(poolKey, static (_, cfg) => new ConnectionPoolEntry(cfg), config);
 
-        if (TryAcquireIdleConnection(poolEntry, out var idleConnection))
-            return idleConnection!;
-
+        // A permit is the right to hold one active connection. It is taken here and travels with
+        // the connection until ReleaseConnection returns it — on every release, not just discards —
+        // so a waiter blocked below is woken the moment any caller releases. Seating from the idle
+        // stack happens only after the permit is held; because releases push to idle *before*
+        // returning the permit, a permit obtained from a release always finds that connection
+        // already seated (or a newer one), and creation only happens with spare capacity.
         await WaitForCapacityAsync(poolEntry, config, cancellationToken).ConfigureAwait(false);
-        
+
         try
         {
-            if (TryAcquireIdleConnection(poolEntry, out var connection))
-            {
-                poolEntry.CapacitySemaphore.Release();
-                return connection!;
-            }
+            if (TryAcquireIdleConnection(poolEntry, out var idleConnection))
+                return idleConnection!;
 
             var newConnection = await CreateConnectionAsync(poolKey, config, cancellationToken).ConfigureAwait(false);
             poolEntry.ActiveConnections.TryAdd(newConnection.ConnectionId, newConnection);
@@ -119,9 +119,11 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     /// <summary>
     /// Waits (bounded by <see cref="ConnectionPoolConfig.AcquireTimeout"/>) for a capacity permit on
     /// the pool entry, tracking the caller as a pending request while it waits. On return the caller
-    /// holds one permit and must release it. Throws <see cref="AdbcException"/> if the pool stays at
-    /// capacity past the timeout; a cancelled token propagates as <see cref="OperationCanceledException"/>.
-    /// Neither a timeout nor a cancellation consumes a permit.
+    /// holds one permit — the right to one active connection — which is returned by
+    /// <see cref="ReleaseConnection"/> (or by the acquire failure path). Throws
+    /// <see cref="AdbcException"/> if the pool stays at capacity past the timeout; a cancelled token
+    /// propagates as <see cref="OperationCanceledException"/>. Neither a timeout nor a cancellation
+    /// consumes a permit.
     /// </summary>
     private static async Task WaitForCapacityAsync(
         ConnectionPoolEntry poolEntry, ConnectionConfig config, CancellationToken cancellationToken)
@@ -153,6 +155,11 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                (now - connection.CreatedAt) <= connection.Config.PoolConfig.MaxConnectionLifetime;
     }
 
+    /// <summary>
+    /// Seats the caller — who must already hold a capacity permit — on a valid idle connection if
+    /// one exists. Idle connections hold no permit, so the stale ones discarded along the way
+    /// involve no permit accounting.
+    /// </summary>
     private bool TryAcquireIdleConnection(ConnectionPoolEntry poolEntry, out IPooledConnection? idleConnection)
     {
         var now = _timeProvider.GetUtcNow();
@@ -184,7 +191,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager
             foreach (var connection in stale)
             {
                 connection.Dispose();
-                poolEntry.CapacitySemaphore.Release();
                 Interlocked.Increment(ref _totalConnectionsClosed);
             }
         }
@@ -199,15 +205,22 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         if (!_pools.TryGetValue(connection.PoolKey, out var poolEntry))
             return;
 
-        poolEntry.ActiveConnections.TryRemove(connection.ConnectionId, out _);
+        // The permit travels with the active connection; a connection that isn't active (double
+        // release, or already discarded) has no permit to return.
+        if (!poolEntry.ActiveConnections.TryRemove(connection.ConnectionId, out _))
+            return;
+
         if (IsConnectionValid(connection, _timeProvider.GetUtcNow()))
             poolEntry.IdleConnections.Push(connection);
         else
         {
             connection.Dispose();
-            poolEntry.CapacitySemaphore.Release();
             Interlocked.Increment(ref _totalConnectionsClosed);
         }
+
+        // Return the permit only after the connection is seated on the idle stack (or discarded),
+        // so a waiter woken by this release always finds the capacity it was promised.
+        poolEntry.CapacitySemaphore.Release();
     }
 
     /// <summary>
@@ -320,10 +333,11 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                 }
             }
 
+            // Evicted idle connections hold no permit (it was returned when they were released),
+            // so eviction is pure disposal with no capacity accounting.
             foreach (var connection in connectionsToRemove)
             {
                 connection.Dispose();
-                poolEntry.CapacitySemaphore.Release();
                 Interlocked.Increment(ref _totalConnectionsClosed);
             }
         }
@@ -475,12 +489,13 @@ internal class ConnectionPoolManager : IConnectionPoolManager
 
         foreach (var poolEntry in _pools.Values)
         {
-            var poolSize = poolEntry.Config.PoolConfig.MaxPoolSize - poolEntry.CapacitySemaphore.CurrentCount;
+            // Permits held == active (checked-out) connections; idle connections hold no permit.
+            var active = poolEntry.Config.PoolConfig.MaxPoolSize - poolEntry.CapacitySemaphore.CurrentCount;
             var idle = poolEntry.IdleConnections.Count;
 
-            totalConnections += poolSize;
+            totalConnections += active + idle;
             idleConnections += idle;
-            activeConnections += poolSize - idle;
+            activeConnections += active;
             pendingRequests += poolEntry.PendingRequests;
         }
 

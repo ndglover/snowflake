@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Apache.Arrow.Ipc;
@@ -65,9 +66,11 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     }
 
     /// <summary>
-    /// Asynchronously creates and initializes a new SnowflakeConnection.
+    /// Asynchronously creates and initializes a new SnowflakeConnection. The token cancels the
+    /// wait for pool capacity and the login round trip.
     /// </summary>
-    internal static async Task<SnowflakeConnection> CreateAsync(ConnectionConfig config, HttpClient httpClient, IConnectionPoolManager connectionPool, ILoggerFactory? loggerFactory = null)
+    internal static async Task<SnowflakeConnection> CreateAsync(ConnectionConfig config, HttpClient httpClient, IConnectionPoolManager connectionPool, ILoggerFactory? loggerFactory = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(connectionPool);
@@ -75,7 +78,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         var log = loggerFactory.CreateLogger<SnowflakeConnection>();
 
         log.LogDebug("Acquiring pooled connection for user {User} account {Account}", config.User, config.Account);
-        var pooledConnection = await connectionPool.AcquireConnectionAsync(config).ConfigureAwait(false);
+        var pooledConnection = await connectionPool.AcquireConnectionAsync(config, cancellationToken).ConfigureAwait(false);
         if (pooledConnection is null)
         {
             throw new AdbcException("Failed to acquire pooled connection.");
@@ -118,7 +121,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     /// <summary>
     /// Proactively renews this connection's session token using the master token.
     /// </summary>
-    internal Task RenewSessionAsync(System.Threading.CancellationToken cancellationToken = default)
+    internal Task RenewSessionAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -131,7 +134,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     /// <summary>
     /// Pings the session heartbeat endpoint to keep this connection's session alive.
     /// </summary>
-    internal Task HeartbeatAsync(System.Threading.CancellationToken cancellationToken = default)
+    internal Task HeartbeatAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 

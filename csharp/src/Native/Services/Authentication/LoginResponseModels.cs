@@ -39,7 +39,6 @@ internal class LoginResponse
 internal class LoginData
 {
     public string? Token { get; set; }
-    public string? SessionToken { get; set; }
     public long? SessionId { get; set; }
     public string? MasterToken { get; set; }
 

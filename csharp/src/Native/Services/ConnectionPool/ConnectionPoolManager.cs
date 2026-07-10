@@ -49,9 +49,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private readonly CancellationTokenSource _cleanupCts = new();
     private readonly object _cleanupStartLock = new();
     private Task? _cleanupTask;
-    private long _totalConnectionsCreated;
-    private long _totalConnectionsClosed;
-    private long _totalConnectionReuses;
     private bool _disposed;
 
     /// <summary>
@@ -106,7 +103,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager
 
             var newConnection = await CreateConnectionAsync(poolKey, config, cancellationToken).ConfigureAwait(false);
             poolEntry.ActiveConnections.TryAdd(newConnection.ConnectionId, newConnection);
-            Interlocked.Increment(ref _totalConnectionsCreated);
             return newConnection;
         }
         catch
@@ -118,7 +114,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
 
     /// <summary>
     /// Waits (bounded by <see cref="ConnectionPoolConfig.AcquireTimeout"/>) for a capacity permit on
-    /// the pool entry, tracking the caller as a pending request while it waits. On return the caller
+    /// the pool entry. On return the caller
     /// holds one permit — the right to one active connection — which is returned by
     /// <see cref="ReleaseConnection"/> (or by the acquire failure path). Throws
     /// <see cref="AdbcException"/> if the pool stays at capacity past the timeout; a cancelled token
@@ -128,17 +124,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private static async Task WaitForCapacityAsync(
         ConnectionPoolEntry poolEntry, ConnectionConfig config, CancellationToken cancellationToken)
     {
-        poolEntry.IncrementPendingRequests();
-        bool entered;
-        try
-        {
-            entered = await poolEntry.CapacitySemaphore
-                .WaitAsync(config.PoolConfig.AcquireTimeout, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            poolEntry.DecrementPendingRequests();
-        }
+        bool entered = await poolEntry.CapacitySemaphore
+            .WaitAsync(config.PoolConfig.AcquireTimeout, cancellationToken).ConfigureAwait(false);
 
         if (!entered)
             throw new AdbcException(
@@ -174,7 +161,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                 {
                     connection.UpdateLastUsedAt();
                     poolEntry.ActiveConnections.TryAdd(connection.ConnectionId, connection);
-                    Interlocked.Increment(ref _totalConnectionReuses);
                     idleConnection = connection;
                     break;
                 }
@@ -189,10 +175,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         if (stale != null)
         {
             foreach (var connection in stale)
-            {
                 connection.Dispose();
-                Interlocked.Increment(ref _totalConnectionsClosed);
-            }
         }
 
         return idleConnection != null;
@@ -213,10 +196,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         if (IsConnectionValid(connection, _timeProvider.GetUtcNow()))
             poolEntry.IdleConnections.Push(connection);
         else
-        {
             connection.Dispose();
-            Interlocked.Increment(ref _totalConnectionsClosed);
-        }
 
         // Return the permit only after the connection is seated on the idle stack (or discarded),
         // so a waiter woken by this release always finds the capacity it was promised.
@@ -336,10 +316,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
             // Evicted idle connections hold no permit (it was returned when they were released),
             // so eviction is pure disposal with no capacity accounting.
             foreach (var connection in connectionsToRemove)
-            {
                 connection.Dispose();
-                Interlocked.Increment(ref _totalConnectionsClosed);
-            }
         }
     }
 
@@ -480,34 +457,4 @@ internal class ConnectionPoolManager : IConnectionPoolManager
             ? string.Empty
             : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 
-    public Task<PoolStatistics> GetStatisticsAsync()
-    {
-        var totalConnections = 0;
-        var activeConnections = 0;
-        var idleConnections = 0;
-        var pendingRequests = 0L;
-
-        foreach (var poolEntry in _pools.Values)
-        {
-            // Permits held == active (checked-out) connections; idle connections hold no permit.
-            var active = poolEntry.Config.PoolConfig.MaxPoolSize - poolEntry.CapacitySemaphore.CurrentCount;
-            var idle = poolEntry.IdleConnections.Count;
-
-            totalConnections += active + idle;
-            idleConnections += idle;
-            activeConnections += active;
-            pendingRequests += poolEntry.PendingRequests;
-        }
-
-        return Task.FromResult(new PoolStatistics
-        {
-            TotalConnections = totalConnections,
-            ActiveConnections = activeConnections,
-            IdleConnections = idleConnections,
-            TotalConnectionsCreated = _totalConnectionsCreated,
-            TotalConnectionsClosed = _totalConnectionsClosed,
-            TotalConnectionReuses = _totalConnectionReuses,
-            PendingRequests = pendingRequests
-        });
-    }
 }

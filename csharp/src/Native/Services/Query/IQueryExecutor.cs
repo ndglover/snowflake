@@ -157,19 +157,9 @@ internal class QueryRequest
 internal class QueryResult
 {
     /// <summary>
-    /// Gets or sets the statement handle for the executed query.
-    /// </summary>
-    public string StatementHandle { get; set; } = string.Empty;
-
-    /// <summary>
     /// Gets or sets the query execution status.
     /// </summary>
     public QueryStatus Status { get; set; }
-
-    /// <summary>
-    /// Gets or sets the Arrow schema for the result set.
-    /// </summary>
-    public Schema? Schema { get; set; }
 
     /// <summary>
     /// Gets or sets the Arrow array stream containing the results.
@@ -180,11 +170,6 @@ internal class QueryResult
     /// Gets or sets the number of rows affected or returned.
     /// </summary>
     public long RowCount { get; set; }
-
-    /// <summary>
-    /// Gets or sets the query execution time.
-    /// </summary>
-    public TimeSpan ExecutionTime { get; set; }
 
     /// <summary>
     /// Gets or sets any errors that occurred during execution.
@@ -199,16 +184,6 @@ internal class QueryResult
 /// </summary>
 internal class PreparedStatement
 {
-    /// <summary>
-    /// Gets or sets the statement handle.
-    /// </summary>
-    public string StatementHandle { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the SQL statement text.
-    /// </summary>
-    public string Statement { get; set; } = string.Empty;
-
     /// <summary>
     /// Gets or sets the result schema (if known).
     /// </summary>

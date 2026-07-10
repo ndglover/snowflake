@@ -23,7 +23,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -107,16 +106,12 @@ internal class QueryExecutor : IQueryExecutor
         ArgumentNullException.ThrowIfNull(request.AuthToken);
         var authToken = request.AuthToken;
 
-        var stopwatch = Stopwatch.StartNew();
-
         try
         {
             var response = await PostQueryWithRenewalAsync(request, describeOnly: false, authToken, cancellationToken).ConfigureAwait(false);
 
-            stopwatch.Stop();
-
             if (!response.Success || response.Data == null)
-                return CreateFailedResponseResult(response, stopwatch.Elapsed);
+                return CreateFailedResponseResult(response);
 
             var data = response.Data;
             _logger.LogDebug(
@@ -128,36 +123,30 @@ internal class QueryExecutor : IQueryExecutor
                 data.RowType != null);
 
             if (HasArrowResult(data))
-                return await CreateSuccessResultAsync(data, authToken, request.PrefetchConcurrency, cancellationToken, stopwatch.Elapsed).ConfigureAwait(false);
+                return await CreateSuccessResultAsync(data, authToken, request.PrefetchConcurrency, cancellationToken).ConfigureAwait(false);
 
             // DML statements (INSERT/UPDATE/DELETE/MERGE) return a JSON summary row whose
             // columns are the affected-row counts (e.g. "number of rows inserted"), not Arrow.
             if (TryGetDmlAffectedRows(data, out long affectedRows))
-                return CreateDmlResult(data, affectedRows, stopwatch.Elapsed);
+                return CreateDmlResult(affectedRows);
 
             // Any other non-Arrow JSON result (DDL status messages such as
             // "Table X successfully created.", USE/ALTER SESSION, etc.) is a successful
             // statement that simply produced no Arrow result set.
-            return CreateNoResultSuccess(data, stopwatch.Elapsed);
+            return CreateNoResultSuccess(data);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
-
             return new QueryResult
             {
-                Status = QueryStatus.Cancelled,
-                ExecutionTime = stopwatch.Elapsed
+                Status = QueryStatus.Cancelled
             };
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
-
             return new QueryResult
             {
                 Status = QueryStatus.Failed,
-                ExecutionTime = stopwatch.Elapsed,
                 Errors =
                 [
                     new QueryError()
@@ -208,20 +197,17 @@ internal class QueryExecutor : IQueryExecutor
         return true;
     }
 
-    private static QueryResult CreateDmlResult(SnowflakeQueryResponse data, long affectedRows, TimeSpan executionTime) =>
+    private static QueryResult CreateDmlResult(long affectedRows) =>
         new()
         {
-            StatementHandle = data.QueryId ?? string.Empty,
             Status = QueryStatus.Success,
-            RowCount = affectedRows,
-            ExecutionTime = executionTime
+            RowCount = affectedRows
         };
 
-    private static QueryResult CreateFailedResponseResult(ApiResponse<SnowflakeQueryResponse> response, TimeSpan executionTime) =>
+    private static QueryResult CreateFailedResponseResult(ApiResponse<SnowflakeQueryResponse> response) =>
         new()
         {
             Status = QueryStatus.Failed,
-            ExecutionTime = executionTime,
             Errors =
             [
                 new QueryError
@@ -232,21 +218,18 @@ internal class QueryExecutor : IQueryExecutor
             ]
         };
 
-    private static QueryResult CreateNoResultSuccess(SnowflakeQueryResponse data, TimeSpan executionTime) =>
+    private static QueryResult CreateNoResultSuccess(SnowflakeQueryResponse data) =>
         new()
         {
-            StatementHandle = data.QueryId ?? string.Empty,
             Status = QueryStatus.Success,
-            RowCount = data.Returned ?? 0,
-            ExecutionTime = executionTime
+            RowCount = data.Returned ?? 0
         };
 
     private async Task<QueryResult> CreateSuccessResultAsync(
         SnowflakeQueryResponse data,
         AuthenticationToken authToken,
         int prefetchConcurrency,
-        CancellationToken cancellationToken,
-        TimeSpan executionTime)
+        CancellationToken cancellationToken)
     {
         var arrayStream = await ChunkedArrowArrayStream.CreateAsync(
             _apiClient,
@@ -264,12 +247,9 @@ internal class QueryExecutor : IQueryExecutor
 
         return new QueryResult
         {
-            StatementHandle = data.QueryId ?? string.Empty,
             Status = QueryStatus.Success,
-            Schema = resultStream.Schema,
             ResultStream = resultStream,
-            RowCount = data.Returned ?? 0,
-            ExecutionTime = executionTime
+            RowCount = data.Returned ?? 0
         };
     }
 
@@ -292,8 +272,6 @@ internal class QueryExecutor : IQueryExecutor
 
         return new PreparedStatement
         {
-            StatementHandle = response.Data.QueryId ?? string.Empty,
-            Statement = request.Statement,
             ResultSchema = BuildSchemaFromRowType(response.Data.RowType)
         };
     }

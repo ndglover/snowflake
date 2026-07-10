@@ -48,11 +48,4 @@ internal interface IConnectionPoolManager : IDisposable
     /// </summary>
     /// <param name="connection">The connection to release.</param>
     void ReleaseConnection(IPooledConnection connection);
-
-
-    /// <summary>
-    /// Gets statistics about the connection pool.
-    /// </summary>
-    /// <returns>Pool statistics.</returns>
-    Task<PoolStatistics> GetStatisticsAsync();
 }

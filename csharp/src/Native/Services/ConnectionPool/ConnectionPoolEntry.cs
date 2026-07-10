@@ -58,21 +58,4 @@ internal class ConnectionPoolEntry(ConnectionConfig config)
     /// Lock object for synchronizing access to idle connections.
     /// </summary>
     internal readonly object IdleLock = new();
-
-    private int _pendingRequests;
-
-    /// <summary>
-    /// Gets the number of threads currently waiting for a connection.
-    /// </summary>
-    internal int PendingRequests => _pendingRequests;
-
-    /// <summary>
-    /// Increments the pending requests counter.
-    /// </summary>
-    internal void IncrementPendingRequests() => Interlocked.Increment(ref _pendingRequests);
-
-    /// <summary>
-    /// Decrements the pending requests counter.
-    /// </summary>
-    internal void DecrementPendingRequests() => Interlocked.Decrement(ref _pendingRequests);
 }

@@ -82,4 +82,38 @@ public class ConnectionTests
         // Then it succeeds
         Assert.NotNull(connection);
     }
+
+    [SkippableFact]
+    public void OpenAndConnect_WithKeyPair_Succeeds()
+    {
+        // Requires an auth_jwt block in the test configuration (a user with an RSA public key
+        // registered via ALTER USER ... SET RSA_PUBLIC_KEY and its private key on disk/inline).
+        JwtAuthentication? jwt = _testConfiguration.Authentication.SnowflakeJwt;
+        Skip.If(jwt is null, "No auth_jwt block in the test configuration");
+
+        // Given a configuration carrying ONLY key-pair credentials, so the parameter mapping
+        // cannot fall back to password auth. The top-level role is deliberately NOT copied:
+        // it belongs to the password test user; the service user runs under its own
+        // DEFAULT_ROLE. (Database/schema are omitted for the same reason — this test only
+        // needs SELECT 1.)
+        var keyPairOnly = new IntegrationTestConfiguration
+        {
+            Account = _testConfiguration.Account,
+            Warehouse = _testConfiguration.Warehouse,
+            TlsSkipVerify = _testConfiguration.TlsSkipVerify,
+            Authentication = new SnowflakeAuthentication { SnowflakeJwt = jwt },
+        };
+
+        // When a connection is opened and a query is run over the JWT-authenticated session
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(keyPairOnly, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        statement.SqlQuery = "SELECT 1";
+        var result = statement.ExecuteQuery();
+
+        // Then the login and the query both succeed
+        Assert.NotNull(result.Stream);
+        result.Stream.Dispose();
+    }
 }

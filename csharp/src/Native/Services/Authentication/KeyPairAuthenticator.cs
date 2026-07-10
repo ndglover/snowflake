@@ -22,7 +22,6 @@
 */
 
 using System;
-using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -53,23 +52,14 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
     public async Task<AuthenticationToken> AuthenticateAsync(
         string account,
         string user,
-        string privateKeyPath,
+        string privateKeyPem,
         string? privateKeyPassphrase = null,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(account))
-            throw new ArgumentException("Account cannot be null or empty.", nameof(account));
+        ArgumentException.ThrowIfNullOrEmpty(account);
+        ArgumentException.ThrowIfNullOrEmpty(user);
+        ArgumentException.ThrowIfNullOrEmpty(privateKeyPem);
 
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User cannot be null or empty.", nameof(user));
-
-        if (string.IsNullOrEmpty(privateKeyPath))
-            throw new ArgumentException("Private key path cannot be null or empty.", nameof(privateKeyPath));
-
-        if (!File.Exists(privateKeyPath))
-            throw new FileNotFoundException($"Private key file not found: {privateKeyPath}");
-
-        var privateKeyPem = await File.ReadAllTextAsync(privateKeyPath, cancellationToken).ConfigureAwait(false);
         var jwtToken = GenerateJwtToken(account, user, privateKeyPem, privateKeyPassphrase);
 
         var authData = new LoginRequestData
@@ -82,7 +72,13 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
         return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
     }
 
-    private static string GenerateJwtToken(string account, string user, string privateKeyPem, string? passphrase)
+    /// <summary>
+    /// Builds the RS256-signed login JWT. The issuer and subject use the bare account locator —
+    /// a region/cloud suffix (anything after the first '.') is dropped — and the issuer carries
+    /// the public-key fingerprint as <c>SHA256:</c> + base64(SHA-256(SubjectPublicKeyInfo)),
+    /// matching gosnowflake and connector-net; Snowflake rejects the token without the prefix.
+    /// </summary>
+    internal static string GenerateJwtToken(string account, string user, string privateKeyPem, string? passphrase)
     {
         try
         {
@@ -98,7 +94,11 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             }
 
             var publicKey = rsa.ExportSubjectPublicKeyInfo();
-            var publicKeyFingerprint = Convert.ToBase64String(SHA256.HashData(publicKey));
+            var publicKeyFingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData(publicKey));
+
+            int regionSeparator = account.IndexOf('.');
+            string accountName = (regionSeparator > 0 ? account[..regionSeparator] : account).ToUpperInvariant();
+            string userName = user.ToUpperInvariant();
 
             var header = new
             {
@@ -109,8 +109,8 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var payload = new
             {
-                iss = $"{account.ToUpperInvariant()}.{user.ToUpperInvariant()}.{publicKeyFingerprint}",
-                sub = $"{account.ToUpperInvariant()}.{user.ToUpperInvariant()}",
+                iss = $"{accountName}.{userName}.{publicKeyFingerprint}",
+                sub = $"{accountName}.{userName}",
                 iat = now,
                 exp = now + 3600
             };
@@ -128,6 +128,11 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
         }
         catch (CryptographicException ex)
         {
+            throw new AdbcException($"Failed to process private key: {ex.Message}", ex);
+        }
+        catch (ArgumentException ex)
+        {
+            // ImportFromPem reports text with no recognizable PEM block as ArgumentException.
             throw new AdbcException($"Failed to process private key: {ex.Message}", ex);
         }
     }

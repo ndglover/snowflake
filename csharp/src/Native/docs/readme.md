@@ -75,7 +75,7 @@ Select with `adbc.snowflake.sql.auth_type`:
 | `auth_type` | Method | Additional keys |
 |---|---|---|
 | `snowflake` (default) | Username/password | `username`, `password` |
-| `snowflake_jwt` / `jwt` | RSA key pair | `…client_option.jwt_private_key_pkcs8_value` (+ `_password` for encrypted keys) |
+| `snowflake_jwt` / `jwt` | RSA key pair | `…client_option.jwt_private_key` (path to PEM file) or `…client_option.jwt_private_key_pkcs8_value` (inline PEM), + `…_pkcs8_password` for encrypted keys |
 | `oauth` | OAuth 2.0 access token | `…client_option.auth_token` |
 | `externalbrowser` | Browser-based SSO | — |
 
@@ -109,7 +109,8 @@ where an official key exists; pool keys are this driver's own (`adbc.snowflake.p
 | `adbc.snowflake.sql.db` / `.schema` / `.warehouse` / `.role` | Session context | — |
 | `adbc.connection.catalog` / `adbc.connection.db_schema` | Canonical ADBC current catalog/schema (take precedence over the `sql.db`/`sql.schema` aliases) | — |
 | `adbc.snowflake.sql.auth_type` | See Authentication above | `snowflake` |
-| `adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value` / `_password` | Key-pair auth material | — |
+| `adbc.snowflake.sql.client_option.jwt_private_key` | Key-pair auth: path to the private-key PEM file | — |
+| `adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value` / `_password` | Key-pair auth: inline PEM / passphrase for encrypted keys | — |
 | `adbc.snowflake.sql.client_option.auth_token` | OAuth access token | — |
 | `adbc.snowflake.sql.uri.host` / `.port` / `.protocol` | Endpoint override (PrivateLink etc.) | account URL |
 | `adbc.snowflake.sql.client_option.tls_skip_verify` | Skip TLS certificate validation (**test only**) | `false` |

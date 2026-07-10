@@ -110,6 +110,10 @@ disabled because it does not populate the `metadata.*` block the metadata tests 
     "auth_snowflake": {
       "user": "your-username",
       "password": "your-password"
+    },
+    "auth_jwt": {
+      "user": "your-service-user",
+      "private_key_file": "C:\\path\\to\\rsa_key.p8"
     }
   },
   "metadata": {
@@ -127,6 +131,30 @@ The native tests need only valid **credentials + a warehouse**, plus a **writabl
 `TypeDecodingTests` target `SNOWFLAKE_SAMPLE_DATA` / SQL literals directly and ignore
 `metadata.*`. The `query` / `expectedResults` / `expectedColumnCount` fields are **not used** by
 the native tests — they remain only for Interop-config compatibility.
+
+When multiple `authentication` blocks are present, the main suite uses `auth_snowflake`
+first; the `auth_jwt` block is exercised only by the key-pair test
+(`ConnectionTests.OpenAndConnect_WithKeyPair_Succeeds`), which skips when the block is
+absent. Key-pair setup — generate a PKCS#8 key pair, then register the public key on a
+dedicated service user (its `DEFAULT_ROLE` only needs warehouse usage; the top-level
+`role` in the config is not applied to this test):
+
+```bash
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -nocrypt -out rsa_key.p8
+openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+```
+
+```sql
+CREATE ROLE IF NOT EXISTS ADBC_TEST_ROLE;
+GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE ADBC_TEST_ROLE;
+CREATE USER <service-user> TYPE = SERVICE
+  DEFAULT_ROLE = ADBC_TEST_ROLE DEFAULT_WAREHOUSE = <warehouse>;
+GRANT ROLE ADBC_TEST_ROLE TO USER <service-user>;
+-- public key with the BEGIN/END lines and newlines stripped
+ALTER USER <service-user> SET RSA_PUBLIC_KEY='MIIB...';
+-- verify: RSA_PUBLIC_KEY_FP must equal SHA256:<base64(SHA-256(SubjectPublicKeyInfo))>
+DESC USER <service-user>;
+```
 
 **2. Point the environment variable at it:**
 

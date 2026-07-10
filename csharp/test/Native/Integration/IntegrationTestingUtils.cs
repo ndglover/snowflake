@@ -85,7 +85,7 @@ internal static class IntegrationTestingUtils
 
             if (!string.IsNullOrWhiteSpace(testConfiguration.Authentication.SnowflakeJwt.PrivateKeyFile))
             {
-                parameters["adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value"] = testConfiguration.Authentication.SnowflakeJwt.PrivateKeyFile;
+                parameters["adbc.snowflake.sql.client_option.jwt_private_key"] = testConfiguration.Authentication.SnowflakeJwt.PrivateKeyFile;
             }
             else if (!string.IsNullOrWhiteSpace(testConfiguration.Authentication.SnowflakeJwt.PrivateKey))
             {

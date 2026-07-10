@@ -22,10 +22,13 @@
 */
 
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
+
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
@@ -108,8 +111,21 @@ internal class AuthenticationService : IAuthenticationService
         if (string.IsNullOrEmpty(user))
             throw new ArgumentException("User is required for key pair authentication.", nameof(user));
 
-        var privateKey = authConfig.PrivateKeyPath ?? authConfig.PrivateKey!;
-        return await _keyPairAuth.AuthenticateAsync(account, user, privateKey, authConfig.PrivateKeyPassphrase, cancellationToken).ConfigureAwait(false);
+        // The authenticator takes the key material itself; a configured file path is resolved
+        // here so an inline key (jwt_private_key_pkcs8_value) is never treated as a path.
+        string privateKeyPem;
+        if (!string.IsNullOrEmpty(authConfig.PrivateKeyPath))
+        {
+            if (!File.Exists(authConfig.PrivateKeyPath))
+                throw new AdbcException($"Private key file not found: {authConfig.PrivateKeyPath}");
+            privateKeyPem = await File.ReadAllTextAsync(authConfig.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            privateKeyPem = authConfig.PrivateKey!;
+        }
+
+        return await _keyPairAuth.AuthenticateAsync(account, user, privateKeyPem, authConfig.PrivateKeyPassphrase, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AuthenticationToken> AuthenticateWithSso(

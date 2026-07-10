@@ -36,14 +36,14 @@ internal interface IKeyPairAuthenticator
     /// </summary>
     /// <param name="account">The Snowflake account identifier.</param>
     /// <param name="user">The username.</param>
-    /// <param name="privateKeyPath">The path to the private key file.</param>
+    /// <param name="privateKeyPem">The private key material in PEM form (PKCS#8, optionally encrypted).</param>
     /// <param name="privateKeyPassphrase">The passphrase for encrypted private keys (optional).</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(
         string account,
         string user,
-        string privateKeyPath,
+        string privateKeyPem,
         string? privateKeyPassphrase = null,
         CancellationToken cancellationToken = default);
 }

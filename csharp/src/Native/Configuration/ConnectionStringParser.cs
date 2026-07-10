@@ -168,7 +168,10 @@ internal static class ConnectionStringParser
         // Password - ADBC standard doesn't prefix this
         authConfig.Password = GetOptionalParameter(parameters, "password");
 
-        // Private key - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value
+        // Private key file path - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key
+        authConfig.PrivateKeyPath = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key");
+
+        // Private key value (inline PEM) - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value
         authConfig.PrivateKey = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value");
 
         // Private key passphrase - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password

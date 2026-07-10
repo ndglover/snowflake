@@ -22,7 +22,6 @@
 */
 
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 
 namespace AdbcDrivers.Snowflake.Native.Configuration;
 
@@ -65,84 +64,4 @@ internal class AuthenticationConfig
     /// Gets or sets additional SSO properties.
     /// </summary>
     public Dictionary<string, string> SsoProperties { get; set; } = new();
-
-    /// <summary>
-    /// Validates the authentication configuration based on the selected type.
-    /// </summary>
-    /// <returns>A collection of validation results.</returns>
-    public IEnumerable<ValidationResult> Validate()
-    {
-        var results = new List<ValidationResult>();
-
-        switch (Type)
-        {
-            case AuthenticationType.UsernamePassword:
-                if (string.IsNullOrEmpty(Password))
-                {
-                    results.Add(new ValidationResult(
-                        "Password is required for username/password authentication.",
-                        [nameof(Password)]));
-                }
-                break;
-
-            case AuthenticationType.KeyPair:
-                if (string.IsNullOrEmpty(PrivateKeyPath) && string.IsNullOrEmpty(PrivateKey))
-                {
-                    results.Add(new ValidationResult(
-                        "Private key path or private key value is required for key pair authentication.",
-                        [nameof(PrivateKeyPath), nameof(PrivateKey)]));
-                }
-                break;
-
-            case AuthenticationType.OAuth:
-                if (string.IsNullOrEmpty(OAuthToken))
-                {
-                    results.Add(new ValidationResult(
-                        "OAuth token is required for OAuth authentication.",
-                        [nameof(OAuthToken)]));
-                }
-                break;
-
-            case AuthenticationType.Sso:
-                // SSO validation can be extended based on specific requirements
-                break;
-
-            case AuthenticationType.ExternalBrowser:
-                // External browser authentication doesn't require additional validation
-                break;
-        }
-
-        return results;
-    }
-}
-
-/// <summary>
-/// Represents the available authentication types for Snowflake.
-/// </summary>
-internal enum AuthenticationType
-{
-    /// <summary>
-    /// Username and password authentication.
-    /// </summary>
-    UsernamePassword,
-
-    /// <summary>
-    /// RSA key pair authentication.
-    /// </summary>
-    KeyPair,
-
-    /// <summary>
-    /// OAuth 2.0 token authentication.
-    /// </summary>
-    OAuth,
-
-    /// <summary>
-    /// Single Sign-On authentication.
-    /// </summary>
-    Sso,
-
-    /// <summary>
-    /// External browser authentication.
-    /// </summary>
-    ExternalBrowser
 }

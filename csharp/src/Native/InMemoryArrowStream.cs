@@ -35,18 +35,11 @@ namespace AdbcDrivers.Snowflake.Native;
 /// record batch held in memory. Used for metadata results (e.g. GetTableTypes,
 /// GetInfo, GetObjects) where the entire result is constructed up front.
 /// </summary>
-internal sealed class InMemoryArrowStream : IArrowArrayStream
+internal sealed class InMemoryArrowStream(Schema schema, IReadOnlyList<IArrowArray> data) : IArrowArrayStream
 {
-    private readonly Schema _schema;
-    private RecordBatch? _batch;
+    private RecordBatch? _batch = new(schema, data, data[0].Length);
 
-    public InMemoryArrowStream(Schema schema, IReadOnlyList<IArrowArray> data)
-    {
-        _schema = schema;
-        _batch = new RecordBatch(schema, data, data[0].Length);
-    }
-
-    public Schema Schema => _schema;
+    public Schema Schema => schema;
 
     public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
     {

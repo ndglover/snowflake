@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
@@ -45,39 +46,35 @@ internal class BasicAuthenticator : IBasicAuthenticator
     }
 
     /// <inheritdoc/>
-    public Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string password,
-        CancellationToken cancellationToken = default)
-    {
-        return AuthenticateAsync(account, user, password, null, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string password,
-        ConnectionConfig? config,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(account))
-            throw new ArgumentException("Account cannot be null or empty.", nameof(account));
-
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User cannot be null or empty.", nameof(user));
-
-        if (string.IsNullOrEmpty(password))
-            throw new ArgumentException("Password cannot be null or empty.", nameof(password));
+        ArgumentNullException.ThrowIfNull(config);
+        ValidateRequirements(config);
 
         var authData = new LoginRequestData
         {
             AUTHENTICATOR = "snowflake",
-            LOGIN_NAME = user,
-            PASSWORD = password
+            LOGIN_NAME = config.User,
+            PASSWORD = config.Authentication.Password
         };
 
-        return await _loginClient.LoginAsync(account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reports everything missing for username/password auth in a single error.</summary>
+    internal static void ValidateRequirements(ConnectionConfig config)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrEmpty(config.Account))
+            missing.Add("account");
+        if (string.IsNullOrEmpty(config.User))
+            missing.Add("user");
+        if (string.IsNullOrEmpty(config.Authentication.Password))
+            missing.Add("password");
+
+        if (missing.Count > 0)
+            throw new ArgumentException($"Username/password authentication requires: {string.Join(", ", missing)}.", nameof(config));
     }
 }

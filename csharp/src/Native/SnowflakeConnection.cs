@@ -87,11 +87,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
 
         var apiClient = new RestApiClient(httpClient, config.EnableCompression);
         var typeConverter = TypeConverter.Shared;
-
-
-        // The fault callback flags the pooled connection when the executor hits a failure that
-        // leaves the session unusable (transport error mid-query, failed renewal, session-fatal GS
-        // code), so ReleaseConnection discards it instead of returning it to the idle pool.
+        
         var queryExecutor = new QueryExecutor(apiClient, typeConverter, config.Account, config.Network,
             loggerFactory.CreateLogger<QueryExecutor>(), () => pooledConnection.IsFaulted = true);
 

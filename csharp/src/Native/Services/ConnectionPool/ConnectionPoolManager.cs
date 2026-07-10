@@ -87,13 +87,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
 
         var poolKey = GeneratePoolKey(config);
         var poolEntry = _pools.GetOrAdd(poolKey, static (_, cfg) => new ConnectionPoolEntry(cfg), config);
-
-        // A permit is the right to hold one active connection. It is taken here and travels with
-        // the connection until ReleaseConnection returns it — on every release, not just discards —
-        // so a waiter blocked below is woken the moment any caller releases. Seating from the idle
-        // stack happens only after the permit is held; because releases push to idle *before*
-        // returning the permit, a permit obtained from a release always finds that connection
-        // already seated (or a newer one), and creation only happens with spare capacity.
+        
         await WaitForCapacityAsync(poolEntry, config, cancellationToken).ConfigureAwait(false);
 
         try
@@ -255,11 +249,6 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private async Task CleanupLoopAsync()
     {
         var timer = new PeriodicTimer(TimeSpan.FromSeconds(60), _timeProvider);
-        // Capture the token once. The throwing member is the CancellationTokenSource.Token getter —
-        // it throws ObjectDisposedException after the source is disposed. Dispose() waits up to 5s
-        // for this loop before disposing the CTS, but a tick can overrun that wait, so re-reading
-        // _cleanupCts.Token could then hit the disposed source. This value-type copy stays usable (already
-        // cancelled), so the loop exits cleanly instead of throwing.
         CancellationToken token = _cleanupCts.Token;
         try
         {
@@ -312,9 +301,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                     poolEntry.IdleConnections.Push(pooledConnection);
                 }
             }
-
-            // Evicted idle connections hold no permit (it was returned when they were released),
-            // so eviction is pure disposal with no capacity accounting.
+            
             foreach (var connection in connectionsToRemove)
                 connection.Dispose();
         }
@@ -390,19 +377,13 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         ConnectionConfig config,
         CancellationToken cancellationToken)
     {
-        // Bound the login/auth round trip by LoginTimeout, without swallowing a caller cancellation.
         using var loginCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         loginCts.CancelAfter(config.LoginTimeout);
 
         AuthenticationToken authToken;
         try
         {
-            authToken = await _authService.AuthenticateAsync(
-                config.Account,
-                config.User,
-                config.Authentication,
-                config,
-                loginCts.Token).ConfigureAwait(false);
+            authToken = await _authService.AuthenticateAsync(config, loginCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

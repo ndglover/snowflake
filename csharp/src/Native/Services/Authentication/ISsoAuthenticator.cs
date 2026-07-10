@@ -21,9 +21,9 @@
 * limitations under the License.
 */
 
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Snowflake.Native.Configuration;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
@@ -33,16 +33,13 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal interface ISsoAuthenticator
 {
     /// <summary>
-    /// Authenticates using SSO with external browser.
+    /// Authenticates using SSO with external browser. Validates its own requirements
+    /// (account, user) and reports everything missing in a single error.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="user">The username.</param>
-    /// <param name="ssoProperties">Additional SSO properties.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        Dictionary<string, string>? ssoProperties = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default);
 }

@@ -215,8 +215,7 @@ internal class QueryExecutor : IQueryExecutor
     /// </summary>
     private static bool IsZeroRowArrowResult(SnowflakeQueryResponse data) =>
         IsArrowFormat(data)
-        && data.RowType is { Count: > 0 }
-        && data.RowSet is not { Count: > 0 };
+        && data is { RowType: { Count: > 0 }, RowSet: not { Count: > 0 } };
 
     private static bool IsArrowFormat(SnowflakeQueryResponse data) =>
         string.Equals(data.QueryResultFormat, "arrow", StringComparison.OrdinalIgnoreCase);

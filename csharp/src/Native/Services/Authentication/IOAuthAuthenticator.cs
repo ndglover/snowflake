@@ -33,17 +33,15 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal interface IOAuthAuthenticator
 {
     /// <summary>
-    /// Authenticates using an OAuth 2.0 access token.
-    /// User identity is derived from the token by Snowflake.
+    /// Authenticates using the OAuth 2.0 access token in the connection configuration.
+    /// User identity is derived from the token by Snowflake, so no user is required.
+    /// Validates its own requirements (account, token) and reports everything missing in
+    /// a single error.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="oauthToken">The OAuth access token.</param>
-    /// <param name="config">Optional connection config for role/warehouse/database.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string oauthToken,
-        ConnectionConfig? config = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default);
 }

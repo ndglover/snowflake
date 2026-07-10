@@ -149,38 +149,29 @@ public class KeyPairAuthenticatorTests
         Assert.Contains("private key", ex.Message);
     }
 
-    // ---- AuthenticationService wiring: inline PEM vs. private-key file path ----
+    // ---- Key-material resolution: inline PEM vs. private-key file path ----
 
-    private static (AuthenticationService Service, IKeyPairAuthenticator KeyPairAuth) CreateService()
+    private static ConnectionConfig KeyPairConfig(AuthenticationConfig authConfig) => new()
     {
-        var keyPairAuth = Substitute.For<IKeyPairAuthenticator>();
-        var service = new AuthenticationService(
-            Substitute.For<IBasicAuthenticator>(),
-            keyPairAuth,
-            Substitute.For<IOAuthAuthenticator>(),
-            Substitute.For<ISsoAuthenticator>());
-        return (service, keyPairAuth);
-    }
+        Account = Account,
+        User = User,
+        Authentication = authConfig,
+    };
 
     [Fact]
-    public async Task AuthenticateAsync_InlineKey_PassesPemThroughUnchanged()
+    public async Task ResolvePrivateKeyPem_InlineKey_PassesPemThroughUnchanged()
     {
-        (AuthenticationService service, IKeyPairAuthenticator keyPairAuth) = CreateService();
         (RSA rsa, string pem) = CreateKey();
         using (rsa)
         {
-            var authConfig = new AuthenticationConfig { Type = AuthenticationType.KeyPair, PrivateKey = pem };
-
-            await service.AuthenticateAsync(Account, User, authConfig);
-
-            await keyPairAuth.Received(1).AuthenticateAsync(Account, User, pem, null, Arg.Any<CancellationToken>());
+            var authConfig = new AuthenticationConfig { PrivateKey = pem };
+            Assert.Equal(pem, await KeyPairAuthenticator.ResolvePrivateKeyPemAsync(authConfig, CancellationToken.None));
         }
     }
 
     [Fact]
-    public async Task AuthenticateAsync_KeyFilePath_ReadsFileAndPassesContent()
+    public async Task ResolvePrivateKeyPem_KeyFilePath_ReadsFileContent()
     {
-        (AuthenticationService service, IKeyPairAuthenticator keyPairAuth) = CreateService();
         (RSA rsa, string pem) = CreateKey();
         using (rsa)
         {
@@ -188,12 +179,10 @@ public class KeyPairAuthenticatorTests
             try
             {
                 await File.WriteAllTextAsync(keyFile, pem);
-                var authConfig = new AuthenticationConfig { Type = AuthenticationType.KeyPair, PrivateKeyPath = keyFile };
+                var authConfig = new AuthenticationConfig { PrivateKeyPath = keyFile };
 
-                await service.AuthenticateAsync(Account, User, authConfig);
-
-                // The file's CONTENT reaches the authenticator, never the path.
-                await keyPairAuth.Received(1).AuthenticateAsync(Account, User, pem, null, Arg.Any<CancellationToken>());
+                // The file's CONTENT is resolved, never the path itself.
+                Assert.Equal(pem, await KeyPairAuthenticator.ResolvePrivateKeyPemAsync(authConfig, CancellationToken.None));
             }
             finally
             {
@@ -203,16 +192,78 @@ public class KeyPairAuthenticatorTests
     }
 
     [Fact]
-    public async Task AuthenticateAsync_MissingKeyFile_ThrowsAdbcException()
+    public async Task ResolvePrivateKeyPem_MissingKeyFile_ThrowsAdbcException()
     {
-        (AuthenticationService service, _) = CreateService();
         var authConfig = new AuthenticationConfig
         {
-            Type = AuthenticationType.KeyPair,
             PrivateKeyPath = Path.Combine(Path.GetTempPath(), "does-not-exist.p8"),
         };
 
-        var ex = await Assert.ThrowsAsync<AdbcException>(() => service.AuthenticateAsync(Account, User, authConfig));
+        var ex = await Assert.ThrowsAsync<AdbcException>(
+            () => KeyPairAuthenticator.ResolvePrivateKeyPemAsync(authConfig, CancellationToken.None));
         Assert.Contains("not found", ex.Message);
+    }
+
+    // ---- Requirement validation: each authenticator reports everything missing at once ----
+
+    [Fact]
+    public void ValidateRequirements_KeyPair_ListsEveryMissingItem()
+    {
+        var config = new ConnectionConfig { Account = Account }; // no user, no key material
+
+        var ex = Assert.Throws<ArgumentException>(() => KeyPairAuthenticator.ValidateRequirements(config));
+        Assert.Contains("user", ex.Message);
+        Assert.Contains("private key", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateRequirements_KeyPair_CompleteConfig_DoesNotThrow()
+    {
+        var config = KeyPairConfig(new AuthenticationConfig { PrivateKey = "pem" });
+        KeyPairAuthenticator.ValidateRequirements(config);
+    }
+
+    [Fact]
+    public void ValidateRequirements_Basic_ListsEveryMissingItem()
+    {
+        var config = new ConnectionConfig { Account = Account }; // no user, no password
+
+        var ex = Assert.Throws<ArgumentException>(() => BasicAuthenticator.ValidateRequirements(config));
+        Assert.Contains("user", ex.Message);
+        Assert.Contains("password", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateRequirements_OAuth_DoesNotRequireUser()
+    {
+        // Snowflake derives the identity from the token, so a user-less config is valid.
+        var config = new ConnectionConfig
+        {
+            Account = Account,
+            Authentication = new AuthenticationConfig { OAuthToken = "token" },
+        };
+        OAuthAuthenticator.ValidateRequirements(config);
+
+        var ex = Assert.Throws<ArgumentException>(() => OAuthAuthenticator.ValidateRequirements(
+            new ConnectionConfig { Account = Account }));
+        Assert.Contains("OAuth token", ex.Message);
+    }
+
+    // ---- AuthenticationService: pure dispatch on the configured auth type ----
+
+    [Fact]
+    public async Task AuthenticationService_KeyPairType_DelegatesConfigToKeyPairAuthenticator()
+    {
+        var keyPairAuth = Substitute.For<IKeyPairAuthenticator>();
+        var service = new AuthenticationService(
+            Substitute.For<IBasicAuthenticator>(),
+            keyPairAuth,
+            Substitute.For<IOAuthAuthenticator>(),
+            Substitute.For<ISsoAuthenticator>());
+        var config = KeyPairConfig(new AuthenticationConfig { Type = AuthenticationType.KeyPair, PrivateKey = "pem" });
+
+        await service.AuthenticateAsync(config);
+
+        await keyPairAuth.Received(1).AuthenticateAsync(config, Arg.Any<CancellationToken>());
     }
 }

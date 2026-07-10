@@ -31,6 +31,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Snowflake.Native.Configuration;
 
 using Apache.Arrow.Adbc;
 
@@ -81,16 +82,14 @@ internal class SsoAuthenticator : ISsoAuthenticator
 
     /// <inheritdoc/>
     public async Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        Dictionary<string, string>? ssoProperties = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(account))
-            throw new ArgumentException("Account cannot be null or empty.", nameof(account));
+        ArgumentNullException.ThrowIfNull(config);
+        ValidateRequirements(config);
 
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User cannot be null or empty.", nameof(user));
+        string account = config.Account;
+        string user = config.User;
 
         // Step 1: Find a free port and start the local HTTP listener
         int localPort = GetRandomUnusedPort();
@@ -118,12 +117,24 @@ internal class SsoAuthenticator : ISsoAuthenticator
                 PROOF_KEY = proofKey
             };
 
-            return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
+            return await _loginClient.LoginAsync(account, authData, config, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             listener.Stop();
         }
+    }
+
+    static void ValidateRequirements(ConnectionConfig config)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrEmpty(config.Account))
+            missing.Add("account");
+        if (string.IsNullOrEmpty(config.User))
+            missing.Add("user");
+
+        if (missing.Count > 0)
+            throw new ArgumentException($"External-browser SSO authentication requires: {string.Join(", ", missing)}.", nameof(config));
     }
 
     private async Task<(string SsoUrl, string ProofKey)> GetSsoUrlAndProofKeyAsync(

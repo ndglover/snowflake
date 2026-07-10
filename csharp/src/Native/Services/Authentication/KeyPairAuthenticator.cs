@@ -22,11 +22,14 @@
 */
 
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Snowflake.Native.Configuration;
 
 using Apache.Arrow.Adbc;
 
@@ -50,26 +53,52 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
 
     /// <inheritdoc/>
     public async Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string privateKeyPem,
-        string? privateKeyPassphrase = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(account);
-        ArgumentException.ThrowIfNullOrEmpty(user);
-        ArgumentException.ThrowIfNullOrEmpty(privateKeyPem);
+        ArgumentNullException.ThrowIfNull(config);
+        ValidateRequirements(config);
 
-        var jwtToken = GenerateJwtToken(account, user, privateKeyPem, privateKeyPassphrase);
+        string privateKeyPem = await ResolvePrivateKeyPemAsync(config.Authentication, cancellationToken).ConfigureAwait(false);
+        var jwtToken = GenerateJwtToken(config.Account, config.User, privateKeyPem, config.Authentication.PrivateKeyPassphrase);
 
         var authData = new LoginRequestData
         {
             AUTHENTICATOR = "SNOWFLAKE_JWT",
-            LOGIN_NAME = user,
+            LOGIN_NAME = config.User,
             TOKEN = jwtToken
         };
 
-        return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+    }
+    
+    internal static void ValidateRequirements(ConnectionConfig config)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrEmpty(config.Account))
+            missing.Add("account");
+        if (string.IsNullOrEmpty(config.User))
+            missing.Add("user");
+        if (string.IsNullOrEmpty(config.Authentication.PrivateKeyPath) && string.IsNullOrEmpty(config.Authentication.PrivateKey))
+            missing.Add("a private key (file path or inline PKCS#8 value)");
+
+        if (missing.Count > 0)
+            throw new ArgumentException($"Key-pair authentication requires: {string.Join(", ", missing)}.", nameof(config));
+    }
+
+    /// <summary>
+    /// Resolves the key material: a configured file path is read from disk; otherwise the
+    /// inline PEM (jwt_private_key_pkcs8_value) is used as-is — never treated as a path.
+    /// </summary>
+    internal static async Task<string> ResolvePrivateKeyPemAsync(AuthenticationConfig authConfig, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(authConfig.PrivateKeyPath))
+            return authConfig.PrivateKey!;
+
+        if (!File.Exists(authConfig.PrivateKeyPath))
+            throw new AdbcException($"Private key file not found: {authConfig.PrivateKeyPath}");
+
+        return await File.ReadAllTextAsync(authConfig.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

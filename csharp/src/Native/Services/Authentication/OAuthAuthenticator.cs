@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
@@ -47,23 +48,30 @@ internal class OAuthAuthenticator : IOAuthAuthenticator
 
     /// <inheritdoc/>
     public async Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string oauthToken,
-        ConnectionConfig? config = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(account))
-            throw new ArgumentException("Account cannot be null or empty.", nameof(account));
-
-        if (string.IsNullOrEmpty(oauthToken))
-            throw new ArgumentException("OAuth token cannot be null or empty.", nameof(oauthToken));
+        ArgumentNullException.ThrowIfNull(config);
+        ValidateRequirements(config);
 
         var authData = new LoginRequestData
         {
             AUTHENTICATOR = "OAUTH",
-            TOKEN = oauthToken
+            TOKEN = config.Authentication.OAuthToken
         };
 
-        return await _loginClient.LoginAsync(account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+    }
+    
+    internal static void ValidateRequirements(ConnectionConfig config)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrEmpty(config.Account))
+            missing.Add("account");
+        if (string.IsNullOrEmpty(config.Authentication.OAuthToken))
+            missing.Add("an OAuth token");
+
+        if (missing.Count > 0)
+            throw new ArgumentException($"OAuth authentication requires: {string.Join(", ", missing)}.", nameof(config));
     }
 }

@@ -33,32 +33,14 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal interface IBasicAuthenticator
 {
     /// <summary>
-    /// Authenticates using username and password.
+    /// Authenticates using the username/password credentials in the connection configuration.
+    /// Validates its own requirements (account, user, password) and reports everything
+    /// missing in a single error.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="user">The username.</param>
-    /// <param name="password">The password.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string password,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Authenticates using username and password with optional connection configuration.
-    /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="user">The username.</param>
-    /// <param name="password">The password.</param>
-    /// <param name="config">Optional connection configuration containing warehouse, database, schema, and role settings.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>An authentication token.</returns>
-    Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string password,
-        ConnectionConfig? config,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default);
 }

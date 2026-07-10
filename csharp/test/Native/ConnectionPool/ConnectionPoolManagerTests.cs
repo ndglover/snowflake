@@ -152,9 +152,7 @@ public class ConnectionPoolManagerTests
     {
         // Create pool with no session-lifecycle collaborator, acquire+release, dispose — no crash
         var authService = Substitute.For<IAuthenticationService>();
-        authService.AuthenticateAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
-            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+        authService.AuthenticateAsync(Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
             .Returns(new AuthenticationToken
             {
                 SessionToken = "session",
@@ -272,9 +270,7 @@ public class ConnectionPoolManagerTests
         // token's expiry is evaluated on the same clock, so it stays valid as fake time advances.
         var fakeTime = new FakeTimeProvider();
         var authService = Substitute.For<IAuthenticationService>();
-        authService.AuthenticateAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
-            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+        authService.AuthenticateAsync(Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
             .Returns(new AuthenticationToken
             {
                 SessionToken = "session",
@@ -345,9 +341,7 @@ public class ConnectionPoolManagerTests
     public async Task AcquireConnection_WhenPoolExhausted_TimesOutWithAdbcException()
     {
         var authService = Substitute.For<IAuthenticationService>();
-        authService.AuthenticateAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
-            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+        authService.AuthenticateAsync(Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
             .Returns(new AuthenticationToken
             {
                 SessionToken = "session",
@@ -451,9 +445,7 @@ public class ConnectionPoolManagerTests
     private static IAuthenticationService SubstituteAuthService()
     {
         var authService = Substitute.For<IAuthenticationService>();
-        authService.AuthenticateAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
-            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+        authService.AuthenticateAsync(Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
             .Returns(_ => new AuthenticationToken
             {
                 SessionToken = "session",
@@ -468,9 +460,7 @@ public class ConnectionPoolManagerTests
     public async Task ReleaseConnection_WhenFaulted_DiscardsInsteadOfPooling()
     {
         var authService = Substitute.For<IAuthenticationService>();
-        authService.AuthenticateAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<AuthenticationConfig>(),
-            Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
+        authService.AuthenticateAsync(Arg.Any<ConnectionConfig>(), Arg.Any<CancellationToken>())
             .Returns(_ => new AuthenticationToken
             {
                 SessionToken = "session",

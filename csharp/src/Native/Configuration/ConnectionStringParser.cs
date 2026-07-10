@@ -295,10 +295,7 @@ internal static class ConnectionStringParser
         var validationContext = new ValidationContext(config);
 
         Validator.TryValidateObject(config, validationContext, validationResults, true);
-
-        var authValidationResults = config.Authentication.Validate();
-        validationResults.AddRange(authValidationResults);
-
+        
         var poolValidationContext = new ValidationContext(config.PoolConfig);
         Validator.TryValidateObject(config.PoolConfig, poolValidationContext, validationResults, true);
 

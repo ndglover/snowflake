@@ -23,6 +23,7 @@
 
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Snowflake.Native.Configuration;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
@@ -32,18 +33,15 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal interface IKeyPairAuthenticator
 {
     /// <summary>
-    /// Authenticates using RSA key pair.
+    /// Authenticates using the RSA key pair configured in the connection configuration
+    /// (a private-key file path or inline PKCS#8 PEM, plus an optional passphrase).
+    /// Validates its own requirements (account, user, key material) and reports everything
+    /// missing in a single error.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="user">The username.</param>
-    /// <param name="privateKeyPem">The private key material in PEM form (PKCS#8, optionally encrypted).</param>
-    /// <param name="privateKeyPassphrase">The passphrase for encrypted private keys (optional).</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        string privateKeyPem,
-        string? privateKeyPassphrase = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default);
 }

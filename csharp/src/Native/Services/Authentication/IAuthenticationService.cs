@@ -33,13 +33,12 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 internal interface IAuthenticationService
 {
     /// <summary>
-    /// Authenticates using the provided configuration and returns an authentication token.
+    /// Authenticates using the connection configuration — the credentials
+    /// (<see cref="ConnectionConfig.Authentication"/>) plus the session context
+    /// (warehouse, database, schema, role) that some authenticators send with the login.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
-    /// <param name="user">The username.</param>
-    /// <param name="authConfig">The authentication configuration.</param>
-    /// <param name="connectionConfig">The connection configuration containing warehouse, database, schema, and role settings.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
-    Task<AuthenticationToken> AuthenticateAsync(string account, string user, AuthenticationConfig authConfig, ConnectionConfig? connectionConfig = null, CancellationToken cancellationToken = default);
+    Task<AuthenticationToken> AuthenticateAsync(ConnectionConfig config, CancellationToken cancellationToken = default);
 }

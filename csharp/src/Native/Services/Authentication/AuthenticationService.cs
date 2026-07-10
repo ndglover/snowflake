@@ -22,13 +22,9 @@
 */
 
 using System;
-using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
-
-using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
@@ -63,78 +59,20 @@ internal class AuthenticationService : IAuthenticationService
 
     /// <inheritdoc/>
     public async Task<AuthenticationToken> AuthenticateAsync(
-        string account,
-        string user,
-        AuthenticationConfig authConfig,
-        ConnectionConfig? connectionConfig = null,
+        ConnectionConfig config,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(account))
-            throw new ArgumentException("Account cannot be null or empty.", nameof(account));
+        ArgumentNullException.ThrowIfNull(config);
 
-        if (authConfig == null)
-            throw new ArgumentNullException(nameof(authConfig));
-
-        // Validate configuration
-        var validationResults = authConfig.Validate();
-        if (validationResults.Any())
+        // Pure dispatch: each authenticator owns its requirements — it validates them itself,
+        // reporting everything missing in one error — so nothing type-specific lives here.
+        return config.Authentication.Type switch
         {
-            var errors = string.Join(", ", validationResults.Select(r => r.ErrorMessage));
-            throw new ArgumentException($"Invalid authentication configuration: {errors}", nameof(authConfig));
-        }
-
-        // Route to appropriate authenticator with type-specific parameter validation
-        return authConfig.Type switch
-        {
-            AuthenticationType.UsernamePassword => await AuthenticateWithPassword(account, user, authConfig, connectionConfig, cancellationToken).ConfigureAwait(false),
-            AuthenticationType.KeyPair => await AuthenticateWithKeyPair(account, user, authConfig, cancellationToken).ConfigureAwait(false),
-            AuthenticationType.OAuth => await _oauthAuth.AuthenticateAsync(account, authConfig.OAuthToken!, connectionConfig, cancellationToken).ConfigureAwait(false),
-            AuthenticationType.Sso or AuthenticationType.ExternalBrowser => await AuthenticateWithSso(account, user, authConfig, cancellationToken).ConfigureAwait(false),
-            _ => throw new NotSupportedException($"Authentication type {authConfig.Type} is not supported.")
+            AuthenticationType.UsernamePassword => await _basicAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.KeyPair => await _keyPairAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.OAuth => await _oauthAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.Sso or AuthenticationType.ExternalBrowser => await _ssoAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
+            _ => throw new NotSupportedException($"Authentication type {config.Authentication.Type} is not supported.")
         };
-    }
-
-    private async Task<AuthenticationToken> AuthenticateWithPassword(
-        string account, string user, AuthenticationConfig authConfig,
-        ConnectionConfig? connectionConfig, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User is required for username/password authentication.", nameof(user));
-
-        return await _basicAuth.AuthenticateAsync(account, user, authConfig.Password!, connectionConfig, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<AuthenticationToken> AuthenticateWithKeyPair(
-        string account, string user, AuthenticationConfig authConfig,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User is required for key pair authentication.", nameof(user));
-
-        // The authenticator takes the key material itself; a configured file path is resolved
-        // here so an inline key (jwt_private_key_pkcs8_value) is never treated as a path.
-        string privateKeyPem;
-        if (!string.IsNullOrEmpty(authConfig.PrivateKeyPath))
-        {
-            if (!File.Exists(authConfig.PrivateKeyPath))
-                throw new AdbcException($"Private key file not found: {authConfig.PrivateKeyPath}");
-            privateKeyPem = await File.ReadAllTextAsync(authConfig.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            privateKeyPem = authConfig.PrivateKey!;
-        }
-
-        return await _keyPairAuth.AuthenticateAsync(account, user, privateKeyPem, authConfig.PrivateKeyPassphrase, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<AuthenticationToken> AuthenticateWithSso(
-        string account, string user, AuthenticationConfig authConfig,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(user))
-            throw new ArgumentException("User is required for SSO authentication.", nameof(user));
-
-        return await _ssoAuth.AuthenticateAsync(account, user, authConfig.SsoProperties, cancellationToken).ConfigureAwait(false);
     }
 }

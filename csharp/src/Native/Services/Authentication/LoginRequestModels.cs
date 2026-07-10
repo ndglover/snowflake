@@ -102,6 +102,20 @@ internal class LoginRequestData
     public string? RAW_SAML_RESPONSE { get; set; }
 
     /// <summary>
+    /// Gets or sets the proof key for external browser authentication.
+    /// </summary>
+    [JsonPropertyName("PROOF_KEY")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PROOF_KEY { get; set; }
+
+    /// <summary>
+    /// Gets or sets the browser mode redirect port for external browser authentication.
+    /// </summary>
+    [JsonPropertyName("BROWSER_MODE_REDIRECT_PORT")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BROWSER_MODE_REDIRECT_PORT { get; set; }
+
+    /// <summary>
     /// Gets or sets the session parameters.
     /// </summary>
     [JsonPropertyName("SESSION_PARAMETERS")]

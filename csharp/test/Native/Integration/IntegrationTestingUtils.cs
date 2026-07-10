@@ -103,6 +103,11 @@ internal static class IntegrationTestingUtils
             parameters["adbc.snowflake.sql.auth_type"] = "oauth";
             parameters["adbc.snowflake.sql.client_option.auth_token"] = Parameter(testConfiguration.Authentication.OAuth.Token, "oauth_token");
         }
+        else if (testConfiguration.Authentication.ExternalBrowser is not null)
+        {
+            parameters["username"] = Parameter(testConfiguration.Authentication.ExternalBrowser.User, "user");
+            parameters["adbc.snowflake.sql.auth_type"] = "externalbrowser";
+        }
         else
         {
             // Fallback to top-level user/password

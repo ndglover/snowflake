@@ -27,6 +27,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,9 +38,33 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 
 /// <summary>
 /// Implements Single Sign-On (SSO) authentication for Snowflake using external browser.
+/// Follows the same flow as the official snowflake-connector-net:
+/// 1. Start local HTTP listener on a random port
+/// 2. POST to /session/authenticator-request with the port → get ssoUrl + proofKey
+/// 3. Open browser to ssoUrl
+/// 4. Snowflake redirects back to localhost with ?token=... 
+/// 5. Send login request with Token + ProofKey
 /// </summary>
 internal class SsoAuthenticator : ISsoAuthenticator
 {
+    private static readonly TimeSpan DefaultBrowserTimeout = TimeSpan.FromSeconds(120);
+
+    private static readonly string SuccessHtml =
+        "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"/>" +
+        "<title>Snowflake Authentication</title></head>" +
+        "<body><h1>Authentication Successful</h1>" +
+        "<p>Your identity was confirmed. You can close this window and return to your application.</p>" +
+        "</body></html>";
+
+    private static readonly string ErrorHtml =
+        "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"/>" +
+        "<title>Snowflake Authentication</title></head>" +
+        "<body><h1>Authentication Failed</h1>" +
+        "<p>Unable to extract authentication token. Please try again.</p>" +
+        "</body></html>";
+
+    private const string TOKEN_QUERY_PREFIX = "?token=";
+
     private readonly SnowflakeLoginClient _loginClient;
     private readonly HttpClient _httpClient;
 
@@ -67,26 +92,44 @@ internal class SsoAuthenticator : ISsoAuthenticator
         if (string.IsNullOrEmpty(user))
             throw new ArgumentException("User cannot be null or empty.", nameof(user));
 
-        // Step 1: Get SSO URL from Snowflake
-        var ssoUrl = await GetSsoUrlAsync(account, user, cancellationToken).ConfigureAwait(false);
+        // Step 1: Find a free port and start the local HTTP listener
+        int localPort = GetRandomUnusedPort();
+        using var listener = CreateHttpListener(localPort);
+        listener.Start();
 
-        // Step 2: Open browser for user authentication
-        var samlResponse = await AuthenticateWithBrowserAsync(ssoUrl, cancellationToken).ConfigureAwait(false);
-
-        // Step 3: Complete authentication with SAML response
-        var authData = new LoginRequestData
+        try
         {
-            AUTHENTICATOR = "EXTERNALBROWSER",
-            LOGIN_NAME = user,
-            RAW_SAML_RESPONSE = samlResponse
-        };
+            // Step 2: Get SSO URL and proof key from Snowflake
+            var (ssoUrl, proofKey) = await GetSsoUrlAndProofKeyAsync(
+                account, user, localPort, cancellationToken).ConfigureAwait(false);
 
-        return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
+            // Step 3: Open browser for user authentication
+            OpenBrowser(ssoUrl);
+
+            // Step 4: Wait for the redirect callback with the token
+            var token = await WaitForTokenAsync(listener, cancellationToken).ConfigureAwait(false);
+
+            // Step 5: Complete authentication with token and proof key
+            var authData = new LoginRequestData
+            {
+                AUTHENTICATOR = "EXTERNALBROWSER",
+                LOGIN_NAME = user,
+                TOKEN = token,
+                PROOF_KEY = proofKey
+            };
+
+            return await _loginClient.LoginAsync(account, authData, null, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
-    private async Task<string> GetSsoUrlAsync(
+    private async Task<(string SsoUrl, string ProofKey)> GetSsoUrlAndProofKeyAsync(
         string account,
         string user,
+        int localPort,
         CancellationToken cancellationToken)
     {
         var authenticatorUrl = _loginClient.BuildUrl(account, SnowflakeLoginClient.AuthenticatorEndpoint);
@@ -97,6 +140,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
                 ACCOUNT_NAME = account,
                 LOGIN_NAME = user,
                 AUTHENTICATOR = "EXTERNALBROWSER",
+                BROWSER_MODE_REDIRECT_PORT = localPort.ToString(),
                 CLIENT_APP_ID = ".NET",
                 CLIENT_APP_VERSION = "3.1.0",
                 CLIENT_ENVIRONMENT = ClientEnvironment.Create(),
@@ -110,56 +154,86 @@ internal class SsoAuthenticator : ISsoAuthenticator
         try
         {
             var response = await _httpClient.PostAsJsonAsync(authenticatorUrl, authenticatorRequest, cancellationToken).ConfigureAwait(false);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            var responseContent = await response.Content.ReadFromJsonAsync<AuthenticatorResponse>(cancellationToken).ConfigureAwait(false);
+            var responseContent = JsonSerializer.Deserialize<AuthenticatorResponse>(responseBody,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
             if (responseContent?.Data?.SsoUrl == null)
-                throw new AdbcException("Failed to retrieve SSO URL from Snowflake.");
+                throw new AdbcException($"Failed to retrieve SSO URL from Snowflake. Response: {responseBody}");
 
-            return responseContent.Data.SsoUrl;
+            if (responseContent.Data.ProofKey == null)
+                throw new AdbcException($"Failed to retrieve proof key from Snowflake. Response: {responseBody}");
+
+            return (responseContent.Data.SsoUrl, responseContent.Data.ProofKey);
         }
         catch (HttpRequestException ex)
         {
             throw new AdbcException($"Failed to get SSO URL from Snowflake: {ex.Message}", ex);
         }
-        catch (JsonException ex)
-        {
-            throw new AdbcException($"Failed to parse SSO URL response: {ex.Message}", ex);
-        }
     }
 
-    private static async Task<string> AuthenticateWithBrowserAsync(string ssoUrl, CancellationToken cancellationToken)
+    private async Task<string> WaitForTokenAsync(
+        HttpListener listener,
+        CancellationToken cancellationToken)
     {
-        using var listener = new HttpListener();
-        var callbackPort = 8080;
-        var callbackUrl = $"http://localhost:{callbackPort}/";
-        listener.Prefixes.Add(callbackUrl);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(DefaultBrowserTimeout);
 
         try
         {
-            listener.Start();
-            OpenBrowser(ssoUrl);
+            var context = await listener.GetContextAsync().WaitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-            var context = await listener.GetContextAsync().ConfigureAwait(false);
-            var samlResponse = context.Request.QueryString["SAMLResponse"];
+            var query = context.Request.Url?.Query;
+            string? token = null;
 
-            if (string.IsNullOrEmpty(samlResponse))
-                throw new AdbcException("No SAML response received from SSO authentication.");
+            if (query != null && query.StartsWith(TOKEN_QUERY_PREFIX, StringComparison.Ordinal))
+            {
+                token = Uri.UnescapeDataString(query.Substring(TOKEN_QUERY_PREFIX.Length));
+            }
 
-            var responseBytes = System.Text.Encoding.UTF8.GetBytes(
-                "<html><body><h1>Authentication Successful</h1><p>You can close this window.</p></body></html>");
-            context.Response.ContentType = "text/html";
-            context.Response.ContentLength64 = responseBytes.Length;
-            await context.Response.OutputStream.WriteAsync(responseBytes, cancellationToken).ConfigureAwait(false);
-            context.Response.Close();
+            if (string.IsNullOrEmpty(token))
+            {
+                await SendResponseAsync(context, ErrorHtml).ConfigureAwait(false);
+                throw new AdbcException("No authentication token received from Snowflake SSO. " +
+                    $"Received query: {query}");
+            }
 
-            return samlResponse;
+            await SendResponseAsync(context, SuccessHtml).ConfigureAwait(false);
+            return token;
         }
-        finally
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            listener.Stop();
+            throw new AdbcException(
+                $"Browser authentication timed out after {DefaultBrowserTimeout.TotalSeconds} seconds. " +
+                "Please ensure your browser completed the SSO login.");
         }
+    }
+
+    private static async Task SendResponseAsync(HttpListenerContext context, string html)
+    {
+        var responseBytes = System.Text.Encoding.UTF8.GetBytes(html);
+        context.Response.ContentType = "text/html; charset=UTF-8";
+        context.Response.ContentLength64 = responseBytes.Length;
+        await context.Response.OutputStream.WriteAsync(responseBytes).ConfigureAwait(false);
+        context.Response.Close();
+    }
+
+    private static HttpListener CreateHttpListener(int port)
+    {
+        var listener = new HttpListener();
+        // Bind both 127.0.0.1 and localhost to handle either redirect target
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Prefixes.Add($"http://localhost:{port}/");
+        return listener;
+    }
+
+    private static int GetRandomUnusedPort()
+    {
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)socket.LocalEndPoint!).Port;
     }
 
     private static void OpenBrowser(string url)
@@ -174,7 +248,9 @@ internal class SsoAuthenticator : ISsoAuthenticator
         }
         catch (Exception ex)
         {
-            throw new AdbcException($"Failed to open browser for SSO authentication: {ex.Message}", ex);
+            throw new AdbcException(
+                $"Failed to open browser for SSO authentication. " +
+                $"Please manually open: {url}", ex);
         }
     }
 }

@@ -109,6 +109,34 @@ public class QueryAndMetadataTests
     }
 
     [SkippableFact]
+    public async Task Query_WithNoMatchingRows_ReturnsEmptyStreamWithSchema()
+    {
+        // A zero-row SELECT still reports Arrow format, but the server sends no row data at
+        // all — only rowtype metadata. The driver must surface an empty stream carrying the
+        // result schema rather than fail with "no result stream was returned".
+        using var connection = Connect();
+        using var statement = connection.CreateStatement();
+        statement.SqlQuery = $"SELECT R_REGIONKEY, R_NAME FROM {SampleDb}.{SampleSchema}.REGION WHERE 1 = 0";
+
+        var result = await statement.ExecuteQueryAsync();
+
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream;
+        Assert.Equal(2, stream.Schema.FieldsList.Count);
+        Assert.Equal("R_REGIONKEY", stream.Schema.FieldsList[0].Name);
+        Assert.Equal("R_NAME", stream.Schema.FieldsList[1].Name);
+
+        long rows = 0;
+        while (await stream.ReadNextRecordBatchAsync() is { } batch)
+        {
+            using (batch)
+                rows += batch.Length;
+        }
+
+        Assert.Equal(0, rows);
+    }
+
+    [SkippableFact]
     public async Task Query_Customer_StreamsAllChunks()
     {
         // Given a query over CUSTOMER — 150,000 rows in SF1, large enough to be returned as

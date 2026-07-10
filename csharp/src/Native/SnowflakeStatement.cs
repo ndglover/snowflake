@@ -131,19 +131,15 @@ public sealed class SnowflakeStatement : AdbcStatement
             // Execute query
             var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
 
-            // Check for query execution failures
-            if (result.Status == QueryStatus.Failed)
+            if (result.Status == QueryStatus.Cancelled)
+                throw new AdbcException("Query was cancelled.");
+
+            if (result.Status != QueryStatus.Success)
                 throw ToAdbcException("Query failed", result);
 
-            if (result.ResultStream == null)
-            {
-                throw new AdbcException(
-                    $"Query succeeded (status={result.Status}, rows={result.RowCount}) but no result stream was returned. " +
-                    "This may indicate the result format is not Arrow. Ensure SESSION_PARAMETERS includes DOTNET_QUERY_RESULT_FORMAT=ARROW.");
-            }
-
-            // Convert to ADBC QueryResult
-            return new QueryResult(result.RowCount, result.ResultStream);
+            // Every Success shape from the executor carries a stream (unsupported response
+            // shapes fail before reaching here).
+            return new QueryResult(result.RowCount, result.ResultStream!);
         }
         catch (AdbcException)
         {
@@ -203,13 +199,20 @@ public sealed class SnowflakeStatement : AdbcStatement
             // Execute update
             var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
 
-            if (result.Status == QueryStatus.Failed)
+            if (result.Status == QueryStatus.Cancelled)
+                throw new AdbcException("Update was cancelled.");
+
+            if (result.Status != QueryStatus.Success)
                 throw ToAdbcException("Update failed", result);
 
-            // A statement that produces a result set (e.g. SELECT) affects no rows, so report
-            // -1 (unknown/not applicable) per the ADBC contract. DML statements report their
-            // affected-row count (parsed from the JSON row-count summary in QueryExecutor).
-            long affectedRows = result.ResultStream != null ? -1 : result.RowCount;
+            // DML statements report the affected-row count parsed from the JSON row-count
+            // summary in QueryExecutor. Any other statement (SELECT, DDL status rows, ...)
+            // affects no rows, so report -1 (unknown/not applicable) per the ADBC contract.
+            long affectedRows = result.AffectedRows ?? -1;
+
+            // ExecuteUpdate has no use for the result set (DML/DDL surface theirs for
+            // ExecuteQuery); release it rather than hold the batch until finalization.
+            result.ResultStream?.Dispose();
             return new UpdateResult(affectedRows);
         }
         catch (AdbcException)

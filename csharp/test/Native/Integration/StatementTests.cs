@@ -218,4 +218,54 @@ public class StatementTests
         Assert.True(result.AffectedRows == 2 || result.AffectedRows == -1);
         Assert.True(result2.AffectedRows == 2 || result2.AffectedRows == -1);
     }
+
+    [SkippableFact]
+    public async Task ExecuteQueryOnDmlAndDdlReturnsSummaryRows()
+    {
+        // Non-SELECT statements run through ExecuteQuery must return their JSON summary as a
+        // result set (parity with the Go driver), not fail for lack of an Arrow stream.
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        string table = string.Format(
+            "{0}.{1}.NATIVE_QRY_{2}",
+            _testConfiguration.Metadata.Catalog,
+            _testConfiguration.Metadata.Schema,
+            Guid.NewGuid().ToString("N"));
+
+        // DDL via ExecuteQuery: one string status row
+        statement.SqlQuery = $"CREATE TEMPORARY TABLE {table} (id INT)";
+        var ddlResult = await statement.ExecuteQueryAsync();
+        Assert.NotNull(ddlResult.Stream);
+        using (var stream = ddlResult.Stream)
+        {
+            var batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            using (batch)
+            {
+                Assert.Equal(1, batch.Length);
+                string? status = ((StringArray)batch.Column(0)).GetString(0);
+                _output.WriteLine($"DDL status row: {status}");
+                Assert.Contains("successfully created", status);
+            }
+        }
+
+        // DML via ExecuteQuery: the affected-count summary row
+        statement.SqlQuery = $"INSERT INTO {table} (id) VALUES (1), (2)";
+        var dmlResult = await statement.ExecuteQueryAsync();
+        Assert.Equal(2, dmlResult.RowCount);
+        Assert.NotNull(dmlResult.Stream);
+        using (var stream = dmlResult.Stream)
+        {
+            Assert.Equal("number of rows inserted", stream.Schema.FieldsList[0].Name);
+            var batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            using (batch)
+            {
+                Assert.Equal(1, batch.Length);
+                Assert.Equal(2L, ((Int64Array)batch.Column(0)).GetValue(0));
+            }
+        }
+    }
 }

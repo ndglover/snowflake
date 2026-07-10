@@ -131,6 +131,23 @@ public class QueryExecutorFaultTests
     }
 
     [Fact]
+    public async Task ExecuteQueryAsync_UnsupportedResultShape_DoesNotFaultConnection()
+    {
+        // A successful response the driver cannot represent (no Arrow data, no rowset) fails
+        // the statement, but the session itself is still healthy.
+        SetupQueryResponses(new ApiResponse<SnowflakeQueryResponse>
+        {
+            Success = true,
+            Data = new SnowflakeQueryResponse(),
+        });
+
+        Services.Query.QueryResult result = await _sut.ExecuteQueryAsync(Request(CreateToken()));
+
+        Assert.Equal(QueryStatus.Failed, result.Status);
+        Assert.Equal(0, _faultCount);
+    }
+
+    [Fact]
     public async Task ExecuteQueryAsync_SessionExpiredWithoutMasterToken_FaultsConnection()
     {
         // 390112 with no master token to renew from: the session cannot be recovered.
@@ -170,7 +187,18 @@ public class QueryExecutorFaultTests
     {
         SetupQueryResponses(
             new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "390112" },
-            new ApiResponse<SnowflakeQueryResponse> { Success = true, Data = new SnowflakeQueryResponse() });
+            new ApiResponse<SnowflakeQueryResponse>
+            {
+                Success = true,
+                // A representable result shape (a command status rowset), so the retry
+                // classifies as a success rather than an unsupported response.
+                Data = new SnowflakeQueryResponse
+                {
+                    QueryResultFormat = "json",
+                    RowType = [new RowType { Name = "status", Type = "text" }],
+                    RowSet = [["Statement executed successfully."]],
+                },
+            });
         SetupRenewalResponse(new ApiResponse<SnowflakeRenewSessionData>
         {
             Success = true,

@@ -220,6 +220,52 @@ public class StatementTests
     }
 
     [SkippableFact]
+    public void Transactions_RollbackDiscardsAndCommitPersists()
+    {
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+
+        // DDL implicitly commits in Snowflake, so create the table BEFORE opening the scope.
+        string table = string.Format(
+            "{0}.{1}.NATIVE_TXN_{2}",
+            _testConfiguration.Metadata.Catalog,
+            _testConfiguration.Metadata.Schema,
+            Guid.NewGuid().ToString("N"));
+        statement.SqlQuery = $"CREATE TABLE {table} (id INT)";
+        statement.ExecuteUpdate();
+
+        connection.SetOption(AdbcOptions.Connection.Autocommit, AdbcOptions.Disabled);
+
+        // An insert that is rolled back leaves no rows...
+        statement.SqlQuery = $"INSERT INTO {table} (id) VALUES (1)";
+        statement.ExecuteUpdate();
+        connection.Rollback();
+        Assert.Equal(0, CountRows(statement, table));
+
+        // ...and one that is committed persists.
+        statement.SqlQuery = $"INSERT INTO {table} (id) VALUES (2)";
+        statement.ExecuteUpdate();
+        connection.Commit();
+        Assert.Equal(1, CountRows(statement, table));
+
+        connection.SetOption(AdbcOptions.Connection.Autocommit, AdbcOptions.Enabled);
+    }
+
+    private static long CountRows(AdbcStatement statement, string table)
+    {
+        statement.SqlQuery = $"SELECT COUNT(*) FROM {table}";
+        var result = statement.ExecuteQuery();
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream;
+        var batch = stream.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+        Assert.NotNull(batch);
+        using (batch)
+            return ((Int64Array)batch.Column(0)).GetValue(0)!.Value;
+    }
+
+    [SkippableFact]
     public async Task LongRunningQuery_OutlivesSyncWindow_ReturnsResultViaPolling()
     {
         // A query that exceeds Snowflake's synchronous response window (~45s) returns a

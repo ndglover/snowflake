@@ -52,9 +52,10 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     private IPooledConnection? _pooledConnection;
     private readonly IQueryExecutor? _queryExecutor;
     private bool _disposed;
+    private bool _autocommit = true;
     private readonly ILogger<SnowflakeConnection> _logger;
 
-    private SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool,
+    internal SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool,
         IPooledConnection pooledConnection, IQueryExecutor queryExecutor,
         ILogger<SnowflakeConnection> logger)
     {
@@ -333,21 +334,81 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     }
 
     /// <summary>
-    /// Commits the current transaction.
+    /// Sets a connection option. Supported: <see cref="AdbcOptions.Connection.Autocommit"/>.
+    /// Snowflake sessions default to autocommit on; disabling it opens a transaction scope
+    /// that <see cref="Commit"/> / <see cref="Rollback"/> end. Re-enabling autocommit first
+    /// commits any pending work (the ADBC contract).
+    /// </summary>
+    public override void SetOption(string key, string value)
+    {
+        ThrowIfDisposed();
+
+        if (!string.Equals(key, AdbcOptions.Connection.Autocommit, StringComparison.Ordinal))
+            throw AdbcException.NotImplemented($"Option '{key}' is not supported.");
+
+        bool enable = AdbcOptions.GetEnabled(value);
+        if (enable == _autocommit)
+            return;
+
+        if (enable)
+            ExecuteSessionStatement("COMMIT");
+
+        ExecuteSessionStatement($"ALTER SESSION SET AUTOCOMMIT = {(enable ? "TRUE" : "FALSE")}");
+        _autocommit = enable;
+    }
+
+    /// <summary>
+    /// Commits the current transaction. Valid only while autocommit is disabled.
     /// </summary>
     public override void Commit()
     {
         ThrowIfDisposed();
-        throw AdbcException.NotImplemented("Transaction support not yet implemented");
+        ThrowIfAutocommit();
+        ExecuteSessionStatement("COMMIT");
     }
 
     /// <summary>
-    /// Rolls back the current transaction.
+    /// Rolls back the current transaction. Valid only while autocommit is disabled.
     /// </summary>
     public override void Rollback()
     {
         ThrowIfDisposed();
-        throw AdbcException.NotImplemented("Transaction support not yet implemented");
+        ThrowIfAutocommit();
+        ExecuteSessionStatement("ROLLBACK");
+    }
+
+    private void ThrowIfAutocommit()
+    {
+        if (_autocommit)
+            throw new AdbcException(
+                $"No transaction is in progress: autocommit is enabled. Disable {AdbcOptions.Connection.Autocommit} first.");
+    }
+
+    /// <summary>
+    /// Runs a session-scoped statement (COMMIT/ROLLBACK/ALTER SESSION) and throws on failure.
+    /// Sync-over-async at the ADBC boundary (SetOption/Commit/Rollback have no async forms);
+    /// safe to block — the async core awaits with ConfigureAwait(false) throughout.
+    /// </summary>
+    private void ExecuteSessionStatement(string sql)
+    {
+        if (_pooledConnection == null || _queryExecutor == null)
+            throw new AdbcException("Connection is not properly initialized.");
+
+        var request = new QueryRequest
+        {
+            Statement = sql,
+            Timeout = _config.QueryTimeout,
+            AuthToken = _pooledConnection.AuthToken
+        };
+
+        var result = _queryExecutor.ExecuteQueryAsync(request).GetAwaiter().GetResult();
+        result.ResultStream?.Dispose();
+
+        if (result.Status != QueryStatus.Success)
+        {
+            string message = result.Errors.Count > 0 ? result.Errors[0].Message : "Unknown error";
+            throw new AdbcException($"'{sql}' failed: {message}");
+        }
     }
 
     /// <summary>
@@ -359,6 +420,9 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         {
             if (_pooledConnection != null)
             {
+                if (!_autocommit)
+                    ResetTransactionStateBestEffort();
+
                 _connectionPool.ReleaseConnection(_pooledConnection);
                 _pooledConnection = null;
             }
@@ -366,6 +430,27 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             _disposed = true;
         }
         base.Dispose();
+    }
+
+    /// <summary>
+    /// A connection released mid-transaction must not hand uncommitted work — or a session
+    /// stuck in AUTOCOMMIT=FALSE — to the pool's next borrower: roll back and restore
+    /// autocommit, and discard the connection if that fails (matching gosnowflake's
+    /// release behavior).
+    /// </summary>
+    private void ResetTransactionStateBestEffort()
+    {
+        try
+        {
+            ExecuteSessionStatement("ROLLBACK");
+            ExecuteSessionStatement("ALTER SESSION SET AUTOCOMMIT = TRUE");
+            _autocommit = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reset transaction state on release; discarding the pooled connection.");
+            _pooledConnection!.IsFaulted = true;
+        }
     }
 
     private void ThrowIfDisposed()

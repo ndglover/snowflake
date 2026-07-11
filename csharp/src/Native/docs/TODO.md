@@ -9,7 +9,6 @@ _None outstanding._
 
 ## Tier 2 — Important (robustness / correctness)
 
-- [ ] **Transactions — `NotImplementedException`** (`SnowflakeConnection.Commit`/`Rollback`) — autocommit only. Blocker *if* consumers need explicit transactions (scope decision).
 - [ ] **Multi-row / array bind (`executemany`) not implemented** — Snowflake's bind protocol supports array bindings (value-per-row) but we only bind single-row batches. The silent-data-loss half is FIXED (2026-07-06): `ConvertArrowBatchToParameters` now **throws `NotSupportedException` on a multi-row batch** instead of silently binding row 0. Remaining work is the feature itself: emit array bindings for multi-row batches.
 
 ## Tier 3 — Hygiene / decisions
@@ -61,6 +60,13 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
   `…identity_provider`, `snowflake://` DSN parsing, arbitrary session-parameter pass-through.
 
 ## Resolved
+
+- [x] **Transactions (2026-07-11)** — `SetOption(adbc.connection.autocommit)` toggles the session's
+  AUTOCOMMIT (re-enabling commits pending work per the ADBC contract); `Commit`/`Rollback` run the
+  statements and throw while autocommit is on. A connection disposed mid-transaction rolls back and
+  restores autocommit before returning to the pool — or is discarded (faulted) if that fails — so a
+  pooled session never hands uncommitted state to the next borrower. Verified live
+  (`StatementTests.Transactions_RollbackDiscardsAndCommitPersists`).
 
 - [x] **Dead-code sweep (2026-07-08)** — removed everything with no caller in production or tests: the pool-statistics surface (`GetStatisticsAsync` + `PoolStatistics` DTO + `PendingRequests`/`_totalConnections*` counters and their hot-path `Interlocked` sites — the old Tier-3 "computed but never surfaced" item, decided as *remove*); `QueryResult.ExecutionTime` (and the `Stopwatch` machinery in `ExecuteQueryAsync` that existed only to fill it), `QueryResult.StatementHandle`, `QueryResult.Schema` (consumers take the schema from the stream); `PreparedStatement.StatementHandle`/`.Statement` (only `ResultSchema` is consumed); `LoginData.SessionToken` (login reads `token`; renewal has its own model). Kept deliberately: `QueryRequest.IsMultiStatement` (permanently false until multi-statement lands), `ChunkInfo.RowCount/UncompressedSize/CompressedSize` (unread, but the Go driver uses them for row-count validation we may add), and the test-only `SnowflakeConnection.RenewSessionAsync`/`HeartbeatAsync`/`AuthToken` hooks. Follow-up resolved 2026-07-10: `SnowflakeStatement` now treats any non-`Success` status as an error — `Cancelled` throws an explicit "was cancelled" `AdbcException` on both execute and update (previously a misleading "no result stream" error / a successful `UpdateResult(0)`).
 - [x] **Pool waiters weren't woken by release-to-idle** — permits used to travel with *discards* only, so a caller blocked in `AcquireConnectionAsync` waited out the full `AcquireTimeout` even while idle connections cycled past it (reproduced live 2026-07-07: 16 workers / pool 4 / 10s timeout → exactly 12 timeouts per window; 32/10/5s → 174 timeouts in 45s). Reworked the accounting: **a permit is the right to one active connection** — taken on every acquire (before seating from idle or creating), returned on every `ReleaseConnection`. Release pushes to idle *before* returning the permit so a woken waiter always finds its connection seated; idle connections hold no permit, so stale discards/evictions involve no permit traffic; double-release is now a guarded no-op (`ActiveConnections.TryRemove` gates the permit return). Also threaded `CancellationToken` through `ConnectAsync`→`CreateAsync`→`AcquireConnectionAsync` so async callers can abandon the capacity wait. Regression tests: waiter woken by release-to-idle (reuses the connection), waiter woken by faulted-discard (creates fresh), double-release returns one permit. Verified live: the 16/4/10s stress scenario went from 48 acquire timeouts to zero.

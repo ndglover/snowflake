@@ -51,6 +51,20 @@ internal interface IRestApiClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Sends a GET request to the specified endpoint and reads a Snowflake API envelope
+    /// (used e.g. to poll a long-running query's result URL).
+    /// </summary>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    /// <param name="endpoint">The API endpoint.</param>
+    /// <param name="token">The authentication token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The API response.</returns>
+    Task<ApiResponse<TResponse>> GetAsync<TResponse>(
+        string endpoint,
+        AuthenticationToken token,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets an Arrow stream from the specified URL.
     /// </summary>
     /// <param name="url">The URL to fetch the Arrow stream from.</param>

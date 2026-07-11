@@ -33,8 +33,9 @@ internal enum ResultShape
 
     /// <summary>
     /// Neither Arrow data nor a rowset — a response the driver cannot represent as a result:
-    /// shapes it does not support (async query-in-progress responses, multi-statement
-    /// parents) or malformed payloads. Surfaced as a failed result, not a success.
+    /// shapes it does not support (multi-statement parents) or malformed payloads. Surfaced
+    /// as a failed result, not a success. (Query-in-progress responses never reach
+    /// classification — the executor polls them to completion first.)
     /// </summary>
     Unsupported,
 }
@@ -271,14 +272,14 @@ internal sealed class QueryResultFactory(IRestApiClient apiClient, ITypeConverte
     /// Builds a failed result for a response the driver cannot represent (see
     /// <see cref="ResultShape.Unsupported"/>). Failing here is deliberate: returning a
     /// stream-less success would let ExecuteUpdate report a bogus completed-with-0-rows for a
-    /// query that may still be running server-side (e.g. an async in-progress response).
+    /// statement that did something the caller cannot observe.
     /// </summary>
     private static QueryResult CreateUnsupportedShapeResult(SnowflakeQueryResponse data) =>
         QueryResult.Failed(
             "UNSUPPORTED_RESULT_SHAPE",
             "The query succeeded but returned a response the driver cannot represent " +
                 $"(queryResultFormat={data.QueryResultFormat ?? "<null>"}, hasRowType={data.RowType != null}, hasRowSet={data.RowSet != null}). " +
-                "Async query responses and multi-statement requests are not supported.");
+                "Multi-statement requests are not supported.");
 
     /// <summary>
     /// Builds an Arrow schema from the response's rowtype metadata (used for describe results

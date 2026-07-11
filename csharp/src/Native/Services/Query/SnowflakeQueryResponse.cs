@@ -31,6 +31,13 @@ internal sealed class SnowflakeQueryResponse
     [JsonPropertyName("queryId")]
     public string? QueryId { get; set; }
 
+    /// <summary>
+    /// The relative URL to poll for the final result when the query outlives the synchronous
+    /// response window (the response then carries a query-in-progress GS code).
+    /// </summary>
+    [JsonPropertyName("getResultUrl")]
+    public string? GetResultUrl { get; set; }
+
     [JsonPropertyName("rowtype")]
     public List<RowType>? RowType { get; set; }
 

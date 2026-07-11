@@ -220,6 +220,32 @@ public class StatementTests
     }
 
     [SkippableFact]
+    public async Task LongRunningQuery_OutlivesSyncWindow_ReturnsResultViaPolling()
+    {
+        // A query that exceeds Snowflake's synchronous response window (~45s) returns a
+        // query-in-progress response with a getResultUrl; the driver must poll it to the
+        // final result instead of failing. SYSTEM$WAIT(50) makes that deterministic.
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        statement.SqlQuery = "SELECT SYSTEM$WAIT(50)";
+
+        var result = await statement.ExecuteQueryAsync();
+
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream;
+        var batch = await stream.ReadNextRecordBatchAsync();
+        Assert.NotNull(batch);
+        using (batch)
+        {
+            string? value = ((StringArray)batch.Column(0)).GetString(0);
+            _output.WriteLine($"Long-running query returned: {value}");
+            Assert.Contains("waited 50 seconds", value);
+        }
+    }
+
+    [SkippableFact]
     public async Task ExecuteQueryOnDmlAndDdlReturnsSummaryRows()
     {
         // Non-SELECT statements run through ExecuteQuery must return their JSON summary as a

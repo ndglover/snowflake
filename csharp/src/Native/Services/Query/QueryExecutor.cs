@@ -61,6 +61,12 @@ internal class QueryExecutor : IQueryExecutor
     // be recovered by renewal — the user must authenticate again.
     const string MasterTokenExpiredCode = "390114";
 
+    // GS codes Snowflake returns while a query is still executing server-side (the query outlived
+    // the synchronous response window); the response carries a getResultUrl to poll instead of a
+    // result. 333334 is the async/detached variant of 333333.
+    const string QueryInProgressCode = "333333";
+    const string QueryInProgressAsyncCode = "333334";
+
     /// <summary>
     /// Initializes a new instance of the <see cref="QueryExecutor"/> class.
     /// </summary>
@@ -201,6 +207,7 @@ internal class QueryExecutor : IQueryExecutor
         try
         {
             response = await PostQueryCoreAsync(request, describeOnly, authToken, cancellationToken).ConfigureAwait(false);
+            response = await WaitForQueryCompletionAsync(response, authToken, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -252,6 +259,48 @@ internal class QueryExecutor : IQueryExecutor
         return await _apiClient.PostAsync<SnowflakeQueryRequestBody, SnowflakeQueryResponse>(
             endpoint, body, authToken, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Completes a query that outlived the synchronous response window. Snowflake then answers
+    /// with a query-in-progress GS code and a <c>getResultUrl</c>; each GET on that URL
+    /// long-polls until the server either finishes the query or hands out the next URL.
+    /// Mirrors gosnowflake's ping-pong loop. A session token that expires while the query runs
+    /// is renewed and the same URL re-polled.
+    /// </summary>
+    private async Task<ApiResponse<SnowflakeQueryResponse>> WaitForQueryCompletionAsync(
+        ApiResponse<SnowflakeQueryResponse> response, AuthenticationToken authToken, CancellationToken cancellationToken)
+    {
+        while (IsQueryInProgress(response))
+        {
+            string? resultUrl = response.Data?.GetResultUrl;
+            if (string.IsNullOrEmpty(resultUrl))
+                throw new AdbcException("Query is in progress but the response carried no result URL to poll.");
+
+            _logger.LogDebug("Query in progress (code {Code}); polling {ResultUrl}.", response.Code, resultUrl);
+
+            string? tokenUsed = authToken.SessionToken;
+            response = await _apiClient.GetAsync<SnowflakeQueryResponse>(
+                $"{_accountUrl}{resultUrl}", authToken, cancellationToken).ConfigureAwait(false);
+
+            if (IsSessionExpired(response) && !string.IsNullOrEmpty(authToken.MasterToken))
+            {
+                _logger.LogDebug("Session token expired while polling; renewing and re-polling.");
+                await RenewSessionCoreAsync(authToken, renewIfSessionTokenIs: tokenUsed, cancellationToken).ConfigureAwait(false);
+                response = await _apiClient.GetAsync<SnowflakeQueryResponse>(
+                    $"{_accountUrl}{resultUrl}", authToken, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// True when a response reports the query is still executing server-side (GS codes 333333 /
+    /// 333334) and the final result must be fetched from the response's <c>getResultUrl</c>.
+    /// </summary>
+    private static bool IsQueryInProgress(ApiResponse<SnowflakeQueryResponse> response) =>
+        string.Equals(response.Code, QueryInProgressCode, StringComparison.Ordinal) ||
+        string.Equals(response.Code, QueryInProgressAsyncCode, StringComparison.Ordinal);
 
     /// <summary>
     /// True when a response indicates the session token has expired (GS code 390112).

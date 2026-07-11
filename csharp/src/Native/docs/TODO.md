@@ -22,7 +22,7 @@ _None outstanding._
 
 ## Scope decisions (confirm whether in scope for v1)
 
-- [ ] PUT/GET stage file transfer, multi-statement, async queries, stored-procedure result handling — currently unsupported.
+- [ ] PUT/GET stage file transfer, multi-statement, stored-procedure result handling — currently unsupported. (Long-running queries that outlive the ~45s synchronous response window ARE supported as of 2026-07-11 — the executor polls the query-in-progress `getResultUrl` to completion, renewing the session token mid-poll if needed. Explicitly *detached* async execution — submit now, fetch by query id later — remains unsupported.)
 
 ## Reference-driver parity gaps (vs the Go driver)
 

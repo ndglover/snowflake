@@ -82,6 +82,10 @@ public class ChunkedArrowArrayStreamTests
             string endpoint, TRequest request, AuthenticationToken token, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<ApiResponse<TResponse>> GetAsync<TResponse>(
+            string endpoint, AuthenticationToken token, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<Stream> GetArrowStreamAsync(
             string url, AuthenticationToken token, Dictionary<string, string>? chunkHeaders = null,
             string? qrmk = null, CancellationToken cancellationToken = default)

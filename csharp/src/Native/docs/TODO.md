@@ -13,7 +13,6 @@ _None outstanding._
 
 ## Tier 3 — Hygiene / decisions
 
-- [ ] **SsoAuthenticator hardcodes port 8080** — no fallback if in use; use an OS-assigned port or try several. Also: **`listener.GetContextAsync()` ignores the cancellation token** — a browser flow the user abandons waits forever even for async callers (and `login_timeout` doesn't cover it). Wrap with the token (e.g. `WaitAsync(cancellationToken)`) and/or an overall SSO timeout.
 - [ ] **Observability — two separate concerns (deferred, decide approach later):**
   - **Logging (diagnostic messages, `ILogger`):** used internally, injected via the `SnowflakeDatabase` ctor `ILoggerFactory`. Works for consumers that construct the database directly, but **not** through the ADBC-standard `AdbcDriver.Open(IReadOnlyDictionary<string,string>)` — a factory is an object and can't ride a string dict. To formalize: thread the factory to the components that lack one (pool, `RestApiClient`) and document how to pass it.
   - **Telemetry (tracing/spans):** the ADBC C# standard is OpenTelemetry via `System.Diagnostics.ActivitySource` (`Apache.Arrow.Adbc.Tracing`: `TracingConnection`/`TracingStatement`/`IActivityTracer`, `…trace_parent` option). Listeners attach out-of-band, so this fits the string-dict `Open` that `ILogger` can't. Emit spans around connect/execute/fetch/renew.
@@ -61,6 +60,14 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
 
 ## Resolved
 
+- [x] **SSO browser-flow hardening (2026-07-11)** — the original item ("hardcodes port 8080";
+  "GetContextAsync ignores cancellation") was largely fixed by the `3cd1c05` "Fix SSO login"
+  commit: the redirect port is OS-assigned and the redirect wait honors the caller token plus a
+  120s browser timeout via `WaitAsync`. Finished off 2026-07-11: external-browser logins get the
+  browser allowance added on top of the pool's `LoginTimeout` (the 60s default used to fire
+  before the 120s browser timeout ever could — cutting off users mid-IdP-login), and the
+  abandoned listener accept is observed so stopping the listener can't raise
+  `TaskScheduler.UnobservedTaskException`.
 - [x] **Multi-row / array bind — `executemany` (2026-07-11)** — a multi-row bound batch now emits
   one array bind per parameter (`"value": ["1", null, ...]`, the same per-value wire format as
   scalar binds; `SnowflakeBindingJsonConverter` writes both shapes) and the server executes the

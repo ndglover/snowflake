@@ -377,8 +377,16 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         ConnectionConfig config,
         CancellationToken cancellationToken)
     {
+        // LoginTimeout bounds the network round trips; an external-browser login also has a
+        // human in the loop, so the interactive step gets the SSO browser allowance on top —
+        // otherwise the default 60s login timeout would fire before the 120s browser timeout
+        // ever could.
+        TimeSpan loginTimeout = config.Authentication.Type is AuthenticationType.Sso or AuthenticationType.ExternalBrowser
+            ? config.LoginTimeout + SsoAuthenticator.DefaultBrowserTimeout
+            : config.LoginTimeout;
+
         using var loginCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        loginCts.CancelAfter(config.LoginTimeout);
+        loginCts.CancelAfter(loginTimeout);
 
         AuthenticationToken authToken;
         try
@@ -387,7 +395,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new AdbcException($"Login timed out after {config.LoginTimeout.TotalSeconds:0}s.");
+            throw new AdbcException($"Login timed out after {loginTimeout.TotalSeconds:0}s.");
         }
 
         return new PooledConnection(

@@ -48,7 +48,7 @@ namespace AdbcDrivers.Snowflake.Native.Services.Authentication;
 /// </summary>
 internal class SsoAuthenticator : ISsoAuthenticator
 {
-    private static readonly TimeSpan DefaultBrowserTimeout = TimeSpan.FromSeconds(120);
+    internal static readonly TimeSpan DefaultBrowserTimeout = TimeSpan.FromSeconds(120);
 
     private static readonly string SuccessHtml =
         "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"/>" +
@@ -192,9 +192,15 @@ internal class SsoAuthenticator : ISsoAuthenticator
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(DefaultBrowserTimeout);
 
+        // When the wait is abandoned (timeout or caller cancellation), stopping the listener
+        // faults this still-pending accept; observe it so it can never surface through
+        // TaskScheduler.UnobservedTaskException.
+        Task<HttpListenerContext> contextTask = listener.GetContextAsync();
+        _ = ObserveAbandonedAcceptAsync(contextTask);
+
         try
         {
-            var context = await listener.GetContextAsync().WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            var context = await contextTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
 
             var query = context.Request.Url?.Query;
             string? token = null;
@@ -219,6 +225,24 @@ internal class SsoAuthenticator : ISsoAuthenticator
             throw new AdbcException(
                 $"Browser authentication timed out after {DefaultBrowserTimeout.TotalSeconds} seconds. " +
                 "Please ensure your browser completed the SSO login.");
+        }
+    }
+
+    /// <summary>
+    /// Awaits the listener accept purely to observe it: after the redirect wait is abandoned,
+    /// the fault raised by stopping the listener is expected and must not go unobserved. On
+    /// the success path the main flow has already consumed the context; awaiting again is a
+    /// no-op.
+    /// </summary>
+    private static async Task ObserveAbandonedAcceptAsync(Task<HttpListenerContext> contextTask)
+    {
+        try
+        {
+            await contextTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Expected when the listener is stopped with the accept still pending.
         }
     }
 

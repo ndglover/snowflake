@@ -209,32 +209,74 @@ public class TypeConverterTests
     }
 
     [Fact]
-    public void ConvertArrowBatchToParameters_MultiRowBatch_ThrowsInsteadOfDroppingRows()
+    public void ConvertArrowBatchToParameters_MultiRowBatch_BindsValueArrays()
     {
-        // Array binding (executemany) isn't implemented; a multi-row batch must fail loudly
-        // rather than silently binding row 0 and losing the rest.
-        var schema = new Schema([new Field("p", Int64Type.Default, true)], null);
-        var values = new Int64Array.Builder().Append(1).Append(2).Build();
-        using var batch = new RecordBatch(schema, [values], 2);
+        // Array binding (executemany): each column becomes one array bind with a wire value
+        // per row — same per-value format as a scalar bind, nulls preserved.
+        var schema = new Schema(
+        [
+            new Field("id", Int64Type.Default, true),
+            new Field("name", StringType.Default, true),
+        ], null);
+        var ids = new Int64Array.Builder().Append(1).AppendNull().Append(3).Build();
+        var names = new StringArray.Builder().Append("a").Append("b").AppendNull().Build();
+        using var batch = new RecordBatch(schema, [ids, names], 3);
 
-        var ex = Assert.Throws<NotSupportedException>(() => _converter.ConvertArrowBatchToParameters(batch));
-        Assert.Contains("Multi-row", ex.Message);
+        var parameters = _converter.ConvertArrowBatchToParameters(batch).Parameters;
+
+        Assert.Equal("FIXED", parameters["1"].Type);
+        Assert.Null(parameters["1"].Value);
+        Assert.Equal(["1", null, "3"], parameters["1"].Values);
+        Assert.Equal("TEXT", parameters["2"].Type);
+        Assert.Equal(["a", "b", null], parameters["2"].Values);
+    }
+
+    [Fact]
+    public void ConvertArrowBatchToParameters_SingleRowBatch_StaysScalar()
+    {
+        // Wire compatibility: a single-row batch keeps the scalar "value" shape.
+        var schema = new Schema([new Field("p", Int64Type.Default, true)], null);
+        var values = new Int64Array.Builder().Append(42).Build();
+        using var batch = new RecordBatch(schema, [values], 1);
+
+        var parameters = _converter.ConvertArrowBatchToParameters(batch).Parameters;
+
+        Assert.Equal("42", parameters["1"].Value);
+        Assert.Null(parameters["1"].Values);
+    }
+
+    [Fact]
+    public void SnowflakeBinding_SerializesScalarAndArrayValueShapes()
+    {
+        // The bind protocol carries both shapes under the same "value" key: a string for a
+        // scalar bind, an array of strings/nulls for an array bind.
+        string scalar = System.Text.Json.JsonSerializer.Serialize(
+            new Services.Transport.SnowflakeBinding("TEXT", "x"));
+        Assert.Equal("""{"type":"TEXT","value":"x"}""", scalar);
+
+        string scalarNull = System.Text.Json.JsonSerializer.Serialize(
+            new Services.Transport.SnowflakeBinding("TEXT", (string?)null));
+        Assert.Equal("""{"type":"TEXT","value":null}""", scalarNull);
+
+        string array = System.Text.Json.JsonSerializer.Serialize(
+            new Services.Transport.SnowflakeBinding("FIXED", ["1", null, "3"]));
+        Assert.Equal("""{"type":"FIXED","value":["1",null,"3"]}""", array);
     }
 
     [Fact]
     public void ConvertArrowBatchToParameters_UnsupportedArrowType_Throws()
     {
         // An untyped null column can't be bound to a Snowflake type — throw rather than guess.
-        var schema = new Schema(new[] { new Field("p", NullType.Default, true) }, null);
-        using var batch = new RecordBatch(schema, new IArrowArray[] { new NullArray(1) }, 1);
+        var schema = new Schema([new Field("p", NullType.Default, true)], null);
+        using var batch = new RecordBatch(schema, [new NullArray(1)], 1);
 
         Assert.Throws<NotSupportedException>(() => _converter.ConvertArrowBatchToParameters(batch));
     }
 
     private void AssertBind(IArrowArray array, string expectedType, string? expectedValue)
     {
-        var schema = new Schema(new[] { new Field("p", array.Data.DataType, true) }, null);
-        using var batch = new RecordBatch(schema, new[] { array }, array.Length);
+        var schema = new Schema([new Field("p", array.Data.DataType, true)], null);
+        using var batch = new RecordBatch(schema, [array], array.Length);
 
         var binding = _converter.ConvertArrowBatchToParameters(batch).Parameters["1"];
 

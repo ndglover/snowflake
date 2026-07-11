@@ -1,7 +1,7 @@
 # Native C# Snowflake ADBC Driver — TODO
 
 Issues to resolve before considering the driver production-ready. Tiered by impact.
-Last reconciled 2026-07-10.
+Last reconciled 2026-07-11.
 
 ## Tier 1 — Blockers (correctness / leaks / missing core)
 
@@ -9,7 +9,7 @@ _None outstanding._
 
 ## Tier 2 — Important (robustness / correctness)
 
-- [ ] **Multi-row / array bind (`executemany`) not implemented** — Snowflake's bind protocol supports array bindings (value-per-row) but we only bind single-row batches. The silent-data-loss half is FIXED (2026-07-06): `ConvertArrowBatchToParameters` now **throws `NotSupportedException` on a multi-row batch** instead of silently binding row 0. Remaining work is the feature itself: emit array bindings for multi-row batches.
+_None outstanding._
 
 ## Tier 3 — Hygiene / decisions
 
@@ -61,6 +61,13 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
 
 ## Resolved
 
+- [x] **Multi-row / array bind — `executemany` (2026-07-11)** — a multi-row bound batch now emits
+  one array bind per parameter (`"value": ["1", null, ...]`, the same per-value wire format as
+  scalar binds; `SnowflakeBindingJsonConverter` writes both shapes) and the server executes the
+  statement once per row. Single-row batches keep the scalar shape for wire compatibility. Verified
+  live (`StatementTests.ExecuteUpdate_MultiRowBind_InsertsEveryRow`). Future option: gosnowflake
+  switches to stage-based bind upload above a row threshold
+  (`CLIENT_STAGE_ARRAY_BINDING_THRESHOLD`); inline array binds cover typical batch sizes.
 - [x] **Transactions (2026-07-11)** — `SetOption(adbc.connection.autocommit)` toggles the session's
   AUTOCOMMIT (re-enabling commits pending work per the ADBC contract); `Commit`/`Rollback` run the
   statements and throw while autocommit is on. A connection disposed mid-transaction rolls back and

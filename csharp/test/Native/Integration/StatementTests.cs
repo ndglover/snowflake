@@ -220,6 +220,111 @@ public class StatementTests
     }
 
     [SkippableFact]
+    public void ExecuteUpdate_MultiRowBind_InsertsEveryRow()
+    {
+        // Array binding (executemany): one INSERT with a 3-row bound batch inserts 3 rows,
+        // including a null cell.
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        string table = string.Format(
+            "{0}.{1}.NATIVE_ARR_{2}",
+            _testConfiguration.Metadata.Catalog,
+            _testConfiguration.Metadata.Schema,
+            Guid.NewGuid().ToString("N"));
+        statement.SqlQuery = $"CREATE TEMPORARY TABLE {table} (id INT, name VARCHAR)";
+        statement.ExecuteUpdate();
+
+        var schema = new Schema(
+        [
+            new Field("id", Apache.Arrow.Types.Int64Type.Default, true),
+            new Field("name", Apache.Arrow.Types.StringType.Default, true),
+        ], null);
+        var ids = new Int64Array.Builder().Append(1).Append(2).Append(3).Build();
+        var names = new StringArray.Builder().Append("alpha").AppendNull().Append("gamma").Build();
+        using var batch = new RecordBatch(schema, [ids, names], 3);
+
+        statement.SqlQuery = $"INSERT INTO {table} (id, name) VALUES (?, ?)";
+        statement.Bind(batch, schema);
+        var result = statement.ExecuteUpdate();
+
+        _output.WriteLine($"Array-bind insert reported {result.AffectedRows} affected rows");
+        Assert.Equal(3, result.AffectedRows);
+
+        // A fresh statement: the original still carries the bound batch, which must not ride
+        // along with the verification query.
+        using var countStatement = connection.CreateStatement();
+        Assert.Equal(3, CountRows(countStatement, table));
+
+        // Bindings persist across executions (ADBC semantics, matching gosnowflake): executing
+        // the same statement again re-binds the same batch and inserts three more rows.
+        var again = statement.ExecuteUpdate();
+        Assert.Equal(3, again.AffectedRows);
+        Assert.Equal(6, CountRows(countStatement, table));
+    }
+
+    [SkippableFact]
+    public void ExecuteUpdate_MultiRowBind_EncodesTypedValuesPerRow()
+    {
+        // Array binds reuse the scalar per-value wire formats (DATE = ms since epoch,
+        // BINARY = hex, DECIMAL = plain string, ...). This proves the server decodes them in
+        // array form too — including a null cell per column — by reading the values back.
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        string table = string.Format(
+            "{0}.{1}.NATIVE_ARRT_{2}",
+            _testConfiguration.Metadata.Catalog,
+            _testConfiguration.Metadata.Schema,
+            Guid.NewGuid().ToString("N"));
+        statement.SqlQuery = $"CREATE TEMPORARY TABLE {table} (d DATE, num NUMBER(10,2), flag BOOLEAN, bin BINARY, s VARCHAR)";
+        statement.ExecuteUpdate();
+
+        var schema = new Schema(
+        [
+            new Field("d", Apache.Arrow.Types.Date32Type.Default, true),
+            new Field("num", new Apache.Arrow.Types.Decimal128Type(10, 2), true),
+            new Field("flag", Apache.Arrow.Types.BooleanType.Default, true),
+            new Field("bin", Apache.Arrow.Types.BinaryType.Default, true),
+            new Field("s", Apache.Arrow.Types.StringType.Default, true),
+        ], null);
+        var dates = new Date32Array.Builder().Append(new DateTime(2024, 1, 15)).AppendNull().Build();
+        var nums = new Decimal128Array.Builder(new Apache.Arrow.Types.Decimal128Type(10, 2)).Append(12.34m).AppendNull().Build();
+        var flags = new BooleanArray.Builder().Append(true).AppendNull().Build();
+        var binBuilder = new BinaryArray.Builder();
+        binBuilder.Append("\u07ad"u8.ToArray().AsSpan());
+        binBuilder.AppendNull();
+        var bins = binBuilder.Build();
+        var strings = new StringArray.Builder().Append("row1").Append("row2").Build();
+        using var batch = new RecordBatch(schema, [dates, nums, flags, bins, strings], 2);
+
+        statement.SqlQuery = $"INSERT INTO {table} (d, num, flag, bin, s) VALUES (?, ?, ?, ?, ?)";
+        statement.Bind(batch, schema);
+        var result = statement.ExecuteUpdate();
+        Assert.Equal(2, result.AffectedRows);
+
+        // Row 1 must match on every typed value; row 2 must be all-null except the string.
+        using var verify = connection.CreateStatement();
+        verify.SqlQuery = $"SELECT COUNT(*) FROM {table} WHERE d = DATE '2024-01-15' AND num = 12.34 AND flag AND bin = TO_BINARY('DEAD', 'HEX') AND s = 'row1'";
+        Assert.Equal(1, ExecuteScalarCount(verify));
+        verify.SqlQuery = $"SELECT COUNT(*) FROM {table} WHERE d IS NULL AND num IS NULL AND flag IS NULL AND bin IS NULL AND s = 'row2'";
+        Assert.Equal(1, ExecuteScalarCount(verify));
+    }
+
+    private static long ExecuteScalarCount(AdbcStatement statement)
+    {
+        var result = statement.ExecuteQuery();
+        Assert.NotNull(result.Stream);
+        using var stream = result.Stream;
+        var batch = stream.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+        Assert.NotNull(batch);
+        using (batch)
+            return ((Int64Array)batch.Column(0)).GetValue(0)!.Value;
+    }
+
+    [SkippableFact]
     public void Transactions_RollbackDiscardsAndCommitPersists()
     {
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);

@@ -21,7 +21,9 @@
 * limitations under the License.
 */
 
+using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace AdbcDrivers.Snowflake.Native.Services.Transport;
@@ -53,11 +55,61 @@ internal sealed class SnowflakeQueryRequestBody
 }
 
 /// <summary>
-/// A single bound parameter value with its Snowflake data type (see <see cref="BindTypeNames"/>).
+/// A bound parameter with its Snowflake data type (see <see cref="BindTypeNames"/>): either a
+/// scalar (<see cref="Value"/>) or, for array binding / executemany, one wire value per row
+/// (<see cref="Values"/> — the server then executes the statement once per row).
 /// </summary>
-internal sealed record SnowflakeBinding(
-    [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("value")] string? Value);
+[JsonConverter(typeof(SnowflakeBindingJsonConverter))]
+internal sealed record SnowflakeBinding(string Type, string? Value)
+{
+    /// <summary>Per-row values for an array bind; null for a scalar bind.</summary>
+    public IReadOnlyList<string?>? Values { get; init; }
+
+    public SnowflakeBinding(string type, IReadOnlyList<string?> values)
+        : this(type, (string?)null) => Values = values;
+}
+
+/// <summary>
+/// Writes a binding as <c>{"type": "...", "value": ...}</c> where <c>value</c> is a string (or
+/// null) for a scalar bind and an array of strings/nulls for an array bind — the two shapes
+/// Snowflake's bind protocol accepts under the same key. Bindings are request-only, so reading
+/// is not supported.
+/// </summary>
+internal sealed class SnowflakeBindingJsonConverter : JsonConverter<SnowflakeBinding>
+{
+    public override void Write(Utf8JsonWriter writer, SnowflakeBinding binding, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("type", binding.Type);
+
+        if (binding.Values is { } rows)
+        {
+            writer.WritePropertyName("value");
+            writer.WriteStartArray();
+            foreach (string? row in rows)
+            {
+                if (row == null)
+                    writer.WriteNullValue();
+                else
+                    writer.WriteStringValue(row);
+            }
+            writer.WriteEndArray();
+        }
+        else if (binding.Value == null)
+        {
+            writer.WriteNull("value");
+        }
+        else
+        {
+            writer.WriteString("value", binding.Value);
+        }
+
+        writer.WriteEndObject();
+    }
+
+    public override SnowflakeBinding Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Bindings are serialized into requests, never read back.");
+}
 
 /// <summary>
 /// An intentionally empty request body (e.g. the heartbeat POST), typed so the source-generated

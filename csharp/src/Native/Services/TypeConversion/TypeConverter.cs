@@ -114,11 +114,6 @@ internal class TypeConverter : ITypeConverter
     public ParameterSet ConvertArrowBatchToParameters(RecordBatch batch)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        
-        if (batch.Length > 1)
-            throw new NotSupportedException(
-                $"Multi-row parameter batches are not supported (got {batch.Length} rows). " +
-                "Bind a single-row batch per execution.");
 
         var parameters = new Dictionary<string, SnowflakeBinding>();
 
@@ -128,13 +123,35 @@ internal class TypeConverter : ITypeConverter
         for (var i = 0; i < batch.Schema.FieldsList.Count; i++)
         {
             // Snowflake binds '?' placeholders positionally: each column is the parameter
-            // at its 1-based ordinal, keyed "1", "2", ... (not by column name). The first
-            // row supplies the value.
+            // at its 1-based ordinal, keyed "1", "2", ... (not by column name). A single-row
+            // batch binds scalar values; a multi-row batch binds one value array per
+            // parameter and the server executes the statement once per row (executemany).
             var key = (i + 1).ToString(CultureInfo.InvariantCulture);
-            parameters[key] = ToBinding(batch.Column(i), 0);
+            parameters[key] = batch.Length == 1
+                ? ToBinding(batch.Column(i), 0)
+                : ToArrayBinding(batch.Column(i), batch.Length);
         }
 
         return new ParameterSet { Parameters = parameters };
+    }
+
+    /// <summary>
+    /// Converts a whole Arrow column into an array bind: the same per-value wire format as a
+    /// scalar bind (<see cref="ToBinding"/>), one entry per row. The bind type is derived from
+    /// the column's Arrow type, so it is identical for every row.
+    /// </summary>
+    private SnowflakeBinding ToArrayBinding(IArrowArray column, int rowCount)
+    {
+        var values = new string?[rowCount];
+        string type = string.Empty;
+        for (int row = 0; row < rowCount; row++)
+        {
+            SnowflakeBinding rowBinding = ToBinding(column, row);
+            type = rowBinding.Type;
+            values[row] = rowBinding.Value;
+        }
+
+        return new SnowflakeBinding(type, values);
     }
 
     /// <summary>
@@ -182,7 +199,7 @@ internal class TypeConverter : ITypeConverter
         // (Arrow can't carry a per-row offset, so TZ would lose nothing meaningful over LTZ here).
         string bindType = type.Timezone == null ? BindTypeNames.TimestampNtz : BindTypeNames.TimestampLtz;
         if (isNull)
-            return new SnowflakeBinding(bindType, null);
+            return new SnowflakeBinding(bindType, (string?)null);
 
         long nanos = array.Values[index] * NanosecondsPerUnit(type.Unit);
         return new SnowflakeBinding(bindType, nanos.ToString(CultureInfo.InvariantCulture));

@@ -1,7 +1,7 @@
 # Native C# Snowflake ADBC Driver — TODO
 
 Issues to resolve before considering the driver production-ready. Tiered by impact.
-Last reconciled 2026-07-01.
+Last reconciled 2026-07-10.
 
 ## Tier 1 — Blockers (correctness / leaks / missing core)
 
@@ -23,7 +23,42 @@ _None outstanding._
 ## Scope decisions (confirm whether in scope for v1)
 
 - [ ] PUT/GET stage file transfer, multi-statement, async queries, stored-procedure result handling — currently unsupported.
-- [ ] **Official ADBC Snowflake options we don't implement** (from the [driver reference](https://arrow.apache.org/adbc/current/driver/snowflake.html)) — decide per option to add or skip: `adbc.snowflake.sql.region`, `…client_option.client_timeout` / `…jwt_expire_timeout`, `…okta_url`, `…ocsp_fail_open_mode`, ingest (`adbc.snowflake.statement.ingest_*`), `…use_high_precision`, `…max_timestamp_precision`, `adbc.rpc.result_queue_size`.
+
+## Reference-driver parity gaps (vs the Go driver)
+
+Folded from the former `gap-analysis.md` (last audited against the code 2026-07-10 —
+`ConnectionStringParser.cs` is the source of truth for option keys). Each is a scope decision:
+implement or explicitly skip. Items already tracked in the tiers above (transactions,
+`executemany`) are not repeated.
+
+- [ ] **Bulk ingestion** — entire feature missing. Go has the full pipeline: Arrow → Parquet →
+  temporary stage → COPY INTO, with four ingest modes (Create/Append/Replace/CreateAppend),
+  configurable write/upload/copy parallelism, compression codec selection, GeoArrow COPY
+  transforms, and row-count verification. High impact for data-loading use cases.
+- [ ] **Additional auth methods** — MFA (`auth_mfa`), Programmatic Access Token (`auth_pat`),
+  Workload Identity Federation (`auth_wif`), native Okta URL (`auth_okta`).
+- [ ] **Statement features** — BindStream (streaming params), ExecuteSchema, query tag,
+  `adbc.rpc.result_queue_size`, statement-level high-precision override, ingest options
+  (`adbc.snowflake.statement.ingest_*`).
+- [ ] **Metadata** — GetStatistics / GetStatisticNames (row count, bytes, retention/time-travel/
+  failsafe metrics); live SetCurrentCatalog / SetCurrentDbSchema setters (the open-time
+  `adbc.connection.catalog`/`.db_schema` options exist); optimized direct-path GetObjects
+  (currently N+1 sequential queries).
+- [ ] **Type support** — TIME is Time64[ns] only (Go: variable unit); ARRAY lacks extension
+  metadata; GEOGRAPHY/GEOMETRY returned as GeoJSON strings (Go: GeoArrow WKB);
+  no `use_high_precision` toggle; no timestamp overflow protection or microsecond fallback
+  (ns timestamps cannot represent dates beyond ~2262); JSON result fallback is partial
+  (command/DML rowsets only — JSON-format SELECTs are unsupported; the session forces Arrow).
+- [ ] **Result streaming** — no stream retry with re-download, no ConcatReader for bound
+  params, no row-count validation (`ChunkInfo.RowCount` is kept for this), no configurable
+  buffer/queue size.
+- [ ] **Connection options not implemented** (from the
+  [driver reference](https://arrow.apache.org/adbc/current/driver/snowflake.html)) —
+  `adbc.snowflake.sql.region`, `…client_option.client_timeout`, `…jwt_expire_timeout`
+  (JWT lifetime is fixed at 1h), `…use_high_precision`, `…max_timestamp_precision`,
+  `…stream_retry_enabled`, `…app_name`, `…ocsp_fail_open_mode`, `…okta_url`,
+  `…disable_telemetry`, `…tracing`, `…config_file`, `…cache_mfa_token`, `…store_temp_creds`,
+  `…identity_provider`, `snowflake://` DSN parsing, arbitrary session-parameter pass-through.
 
 ## Resolved
 

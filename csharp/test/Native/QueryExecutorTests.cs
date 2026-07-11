@@ -54,7 +54,7 @@ public class QueryExecutorTests
     {
         SnowflakeQueryResponse data = Response(["number of rows inserted"], ["2"]);
 
-        Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
+        Assert.True(QueryResultFactory.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(2, affected);
     }
 
@@ -65,7 +65,7 @@ public class QueryExecutorTests
             ["number of rows inserted", "number of rows updated"],
             ["3", "2"]);
 
-        Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
+        Assert.True(QueryResultFactory.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(5, affected);
     }
 
@@ -76,7 +76,7 @@ public class QueryExecutorTests
         SnowflakeQueryResponse data = Response(["number of rows deleted"], ["5"]);
         data.Returned = 1;
 
-        Assert.True(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
+        Assert.True(QueryResultFactory.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(5, affected);
     }
 
@@ -85,14 +85,14 @@ public class QueryExecutorTests
     {
         SnowflakeQueryResponse data = Response(["MY_COLUMN"], ["1"]);
 
-        Assert.False(QueryExecutor.TryGetDmlAffectedRows(data, out long affected));
+        Assert.False(QueryResultFactory.TryGetDmlAffectedRows(data, out long affected));
         Assert.Equal(0, affected);
     }
 
     [Fact]
     public void TryGetDmlAffectedRows_EmptyResult_ReturnsFalse()
     {
-        Assert.False(QueryExecutor.TryGetDmlAffectedRows(new SnowflakeQueryResponse(), out long affected));
+        Assert.False(QueryResultFactory.TryGetDmlAffectedRows(new SnowflakeQueryResponse(), out long affected));
         Assert.Equal(0, affected);
     }
 

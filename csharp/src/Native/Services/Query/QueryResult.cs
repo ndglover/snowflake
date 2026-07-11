@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Apache.Arrow.Ipc;
 
@@ -35,4 +36,40 @@ internal class QueryResult
     /// Gets or sets any errors that occurred during execution.
     /// </summary>
     public List<QueryError> Errors { get; set; } = [];
+
+    /// <summary>Creates a successful result carrying a result-set stream.</summary>
+    /// <param name="resultStream">The Arrow stream with the result set.</param>
+    /// <param name="rowCount">The row count to report (returned rows, or the affected count for DML).</param>
+    /// <param name="affectedRows">The DML affected-row count; null for non-DML statements.</param>
+    public static QueryResult Success(IArrowArrayStream resultStream, long rowCount, long? affectedRows = null) =>
+        new()
+        {
+            Status = QueryStatus.Success,
+            ResultStream = resultStream,
+            RowCount = rowCount,
+            AffectedRows = affectedRows
+        };
+
+    /// <summary>Creates a failed result with a single error.</summary>
+    public static QueryResult Failed(string errorCode, string message, Exception? exception = null) =>
+        new()
+        {
+            Status = QueryStatus.Failed,
+            Errors =
+            [
+                new QueryError
+                {
+                    ErrorCode = errorCode,
+                    Message = message,
+                    Exception = exception
+                }
+            ]
+        };
+
+    /// <summary>Creates a cancelled result (no stream, no errors).</summary>
+    public static QueryResult Cancelled() =>
+        new()
+        {
+            Status = QueryStatus.Cancelled
+        };
 }

@@ -197,9 +197,8 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             Timeout = _config.QueryTimeout,
             AuthToken = _pooledConnection.AuthToken
         };
-
-        PreparedStatement prepared = _queryExecutor.DescribeAsync(request)
-            .ConfigureAwait(false).GetAwaiter().GetResult();
+        
+        PreparedStatement prepared = _queryExecutor.DescribeAsync(request).GetAwaiter().GetResult();
 
         return prepared.ResultSchema
             ?? throw new AdbcException($"Unable to determine schema for table '{tableName}'.");

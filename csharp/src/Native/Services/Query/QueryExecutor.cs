@@ -43,7 +43,7 @@ namespace AdbcDrivers.Snowflake.Native.Services.Query;
 internal class QueryExecutor : IQueryExecutor
 {
     private readonly IRestApiClient _apiClient;
-    private readonly ITypeConverter _typeConverter;
+    private readonly QueryResultFactory _resultFactory;
     private readonly string _accountUrl;
     private readonly ILogger<QueryExecutor> _logger;
     private readonly Action _onConnectionFault;
@@ -90,7 +90,7 @@ internal class QueryExecutor : IQueryExecutor
         ArgumentException.ThrowIfNullOrEmpty(account);
 
         _apiClient = apiClient;
-        _typeConverter = typeConverter;
+        _resultFactory = new QueryResultFactory(apiClient, typeConverter);
         _logger = logger;
         _onConnectionFault = onConnectionFault;
 
@@ -115,7 +115,7 @@ internal class QueryExecutor : IQueryExecutor
                 return CreateFailedResponseResult(response);
 
             var data = response.Data;
-            ResultShape shape = Classify(data);
+            ResultShape shape = QueryResultFactory.Classify(data);
             _logger.LogDebug(
                 "ResultShape={ResultShape}, QueryResultFormat={QueryResultFormat}, HasRowSetBase64={HasRowSetBase64}, ChunkCount={ChunkCount}, HasRowSet={HasRowSet}, HasRowType={HasRowType}",
                 shape,
@@ -125,317 +125,20 @@ internal class QueryExecutor : IQueryExecutor
                 data.RowSet != null,
                 data.RowType != null);
 
-            return shape switch
-            {
-                ResultShape.ArrowData => await CreateArrowStreamResultAsync(data, authToken, request.PrefetchConcurrency, cancellationToken).ConfigureAwait(false),
-                ResultShape.EmptyArrow => CreateEmptyArrowResult(data),
-                ResultShape.DmlSummary => CreateDmlSummaryResult(data),
-                ResultShape.CommandRowSet => CreateCommandRowSetResult(data),
-                ResultShape.Unsupported => CreateUnsupportedShapeResult(data),
-                _ => throw new NotSupportedException($"Result shape {shape} has no handler.")
-            };
+            return await _resultFactory.CreateResultAsync(shape, data, authToken, request.PrefetchConcurrency, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new QueryResult
-            {
-                Status = QueryStatus.Cancelled
-            };
+            return QueryResult.Cancelled();
         }
         catch (Exception ex)
         {
-            return new QueryResult
-            {
-                Status = QueryStatus.Failed,
-                Errors =
-                [
-                    new QueryError()
-                    {
-                        ErrorCode = "EXECUTION_ERROR",
-                        Message = $"Query execution failed: {ex.Message}",
-                        Exception = ex
-                    }
-                ]
-            };
+            return QueryResult.Failed("EXECUTION_ERROR", $"Query execution failed: {ex.Message}", ex);
         }
-    }
-
-    /// <summary>
-    /// The shapes a successful query response can take. <see cref="ExecuteQueryAsync"/>
-    /// dispatches on this to build the matching <see cref="QueryResult"/>; the checks in
-    /// <see cref="Classify"/> run in declaration order.
-    /// </summary>
-    private enum ResultShape
-    {
-        /// <summary>Arrow data, inline (rowsetBase64) and/or in downloadable chunks: a SELECT that returned rows.</summary>
-        ArrowData,
-
-        /// <summary>Arrow format with no data at all: a SELECT that matched zero rows; only the rowtype metadata carries the schema.</summary>
-        EmptyArrow,
-
-        /// <summary>The JSON affected-count summary row of a DML statement (INSERT/UPDATE/DELETE/MERGE).</summary>
-        DmlSummary,
-
-        /// <summary>Any other JSON rowset: command output such as DDL status messages, USE/ALTER SESSION, SHOW.</summary>
-        CommandRowSet,
-
-        /// <summary>
-        /// Neither Arrow data nor a rowset — a response the driver cannot represent as a result:
-        /// shapes it does not support (async query-in-progress responses, multi-statement
-        /// parents) or malformed payloads. Surfaced as a failed result, not a success.
-        /// </summary>
-        Unsupported,
-    }
-
-    private static ResultShape Classify(SnowflakeQueryResponse data)
-    {
-        if (HasArrowData(data))
-            return ResultShape.ArrowData;
-
-        if (IsZeroRowArrowResult(data))
-            return ResultShape.EmptyArrow;
-
-        if (TryGetDmlAffectedRows(data, out _))
-            return ResultShape.DmlSummary;
-
-        if (data is { RowType: { Count: > 0 }, RowSet: not null })
-            return ResultShape.CommandRowSet;
-
-        return ResultShape.Unsupported;
-    }
-
-    private static bool HasArrowData(SnowflakeQueryResponse data) =>
-        !string.IsNullOrEmpty(data.RowSetBase64) || (data.Chunks?.Count > 0);
-
-    /// <summary>
-    /// Arrow format with rowtype metadata but no row data anywhere: a SELECT that matched zero
-    /// rows. Requiring the rowset to be absent or empty keeps this check order-independent of
-    /// the JSON-rowset shapes — a response carrying JSON rows (a DML summary or command
-    /// output) can never classify as an empty Arrow result, whatever format it reports.
-    /// </summary>
-    private static bool IsZeroRowArrowResult(SnowflakeQueryResponse data) =>
-        IsArrowFormat(data)
-        && data is { RowType: { Count: > 0 }, RowSet: not { Count: > 0 } };
-
-    private static bool IsArrowFormat(SnowflakeQueryResponse data) =>
-        string.Equals(data.QueryResultFormat, "arrow", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Detects a DML row-count summary result and sums the affected-row counts.
-    /// Snowflake returns DML results as a single JSON row whose columns are named
-    /// "number of rows inserted" / "...updated" / "...deleted" (MERGE returns several).
-    /// </summary>
-    internal static bool TryGetDmlAffectedRows(SnowflakeQueryResponse data, out long affectedRows)
-    {
-        affectedRows = 0;
-
-        List<RowType>? rowTypes = data.RowType;
-        List<List<string>>? rowSet = data.RowSet;
-        if (rowTypes == null || rowTypes.Count == 0 || rowSet == null || rowSet.Count == 0)
-            return false;
-
-        foreach (RowType rowType in rowTypes)
-        {
-            if (rowType.Name == null ||
-                !rowType.Name.StartsWith("number of ", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
-
-        long total = 0;
-        foreach (string cell in rowSet[0])
-        {
-            if (long.TryParse(cell, NumberStyles.Integer, CultureInfo.InvariantCulture, out long count))
-                total += count;
-        }
-
-        affectedRows = total;
-        return true;
-    }
-
-    /// <summary>
-    /// Builds the result for a DML statement. The affected-count summary row is surfaced as a
-    /// result set (an Int64 column per count, matching the Go driver) so ExecuteQuery on a DML
-    /// statement returns something readable; <see cref="QueryResult.AffectedRows"/> carries the
-    /// summed count for ExecuteUpdate.
-    /// </summary>
-    private static QueryResult CreateDmlSummaryResult(SnowflakeQueryResponse data)
-    {
-        if (!TryGetDmlAffectedRows(data, out long affectedRows))
-            throw new NotSupportedException("Response is not a DML row-count summary.");
-
-        // TryGetDmlAffectedRows validated that rowtype and rowset are present and non-empty.
-        List<RowType> rowTypes = data.RowType!;
-        List<string> row = data.RowSet![0];
-
-        var fields = new List<Field>(rowTypes.Count);
-        var columns = new List<IArrowArray>(rowTypes.Count);
-        for (int i = 0; i < rowTypes.Count; i++)
-        {
-            fields.Add(new Field(rowTypes[i].Name ?? string.Empty, Int64Type.Default, nullable: true));
-            var builder = new Int64Array.Builder();
-            if (i < row.Count && long.TryParse(row[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out long count))
-                builder.Append(count);
-            else
-                builder.AppendNull();
-            columns.Add(builder.Build());
-        }
-
-        return new QueryResult
-        {
-            Status = QueryStatus.Success,
-            ResultStream = new InMemoryArrowStream(new Schema(fields, null), columns),
-            RowCount = affectedRows,
-            AffectedRows = affectedRows
-        };
-    }
-
-    /// <summary>
-    /// Builds the result for a zero-row Arrow response: an empty stream whose schema is built
-    /// from the rowtype metadata, so callers read an empty result set instead of failing on a
-    /// missing stream. The schema matches what a non-empty result would surface, because the
-    /// type converter applies the same FIXED sizing rule as the result decoder.
-    /// </summary>
-    private QueryResult CreateEmptyArrowResult(SnowflakeQueryResponse data)
-    {
-        Schema? schema;
-        try
-        {
-            schema = BuildSchemaFromRowType(data.RowType);
-        }
-        catch (NotSupportedException ex)
-        {
-            // A rowtype column type the converter cannot map (e.g. a type newer than the
-            // driver). A non-empty result would pass such a column through in whatever Arrow
-            // encoding Snowflake sends, but with zero rows there is no wire type to fall back
-            // on — fail with the real reason instead of a generic execution error.
-            return new QueryResult
-            {
-                Status = QueryStatus.Failed,
-                Errors =
-                [
-                    new QueryError
-                    {
-                        ErrorCode = "UNSUPPORTED_RESULT_SCHEMA",
-                        Message = "The statement returned zero rows and the driver cannot build the result schema " +
-                            $"from rowtype metadata: {ex.Message}",
-                        Exception = ex
-                    }
-                ]
-            };
-        }
-
-        if (schema == null)
-            return CreateUnsupportedShapeResult(data);
-
-        return new QueryResult
-        {
-            Status = QueryStatus.Success,
-            ResultStream = new EmptyArrowArrayStream(schema),
-            RowCount = data.Returned ?? 0
-        };
-    }
-
-    /// <summary>
-    /// Surfaces a JSON rowset (DDL/USE status messages, SHOW output, ...) as a result set of
-    /// string columns. SELECT results always arrive as Arrow (the session forces
-    /// DOTNET_QUERY_RESULT_FORMAT=ARROW), so a JSON rowset is a command output whose wire
-    /// values are strings.
-    /// </summary>
-    private static QueryResult CreateCommandRowSetResult(SnowflakeQueryResponse data)
-    {
-        List<RowType> rowTypes = data.RowType!;
-        List<List<string>> rowSet = data.RowSet!;
-
-        var fields = new List<Field>(rowTypes.Count);
-        var columns = new List<IArrowArray>(rowTypes.Count);
-        for (int i = 0; i < rowTypes.Count; i++)
-        {
-            fields.Add(new Field(rowTypes[i].Name ?? string.Empty, StringType.Default, nullable: true));
-            var builder = new StringArray.Builder();
-            foreach (List<string>? row in rowSet)
-            {
-                string? value = row != null && i < row.Count ? row[i] : null;
-                if (value == null)
-                    builder.AppendNull();
-                else
-                    builder.Append(value);
-            }
-            columns.Add(builder.Build());
-        }
-
-        return new QueryResult
-        {
-            Status = QueryStatus.Success,
-            ResultStream = new InMemoryArrowStream(new Schema(fields, null), columns),
-            RowCount = data.Returned ?? rowSet.Count
-        };
     }
 
     private static QueryResult CreateFailedResponseResult(ApiResponse<SnowflakeQueryResponse> response) =>
-        new()
-        {
-            Status = QueryStatus.Failed,
-            Errors =
-            [
-                new QueryError
-                {
-                    ErrorCode = response.Code ?? "UNKNOWN",
-                    Message = response.Message ?? "Query execution failed."
-                }
-            ]
-        };
-
-    /// <summary>
-    /// Builds a failed result for a response the driver cannot represent (see
-    /// <see cref="ResultShape.Unsupported"/>). Failing here is deliberate: returning a
-    /// stream-less success would let ExecuteUpdate report a bogus completed-with-0-rows for a
-    /// query that may still be running server-side (e.g. an async in-progress response).
-    /// </summary>
-    private static QueryResult CreateUnsupportedShapeResult(SnowflakeQueryResponse data) =>
-        new()
-        {
-            Status = QueryStatus.Failed,
-            Errors =
-            [
-                new QueryError
-                {
-                    ErrorCode = "UNSUPPORTED_RESULT_SHAPE",
-                    Message = "The query succeeded but returned a response the driver cannot represent " +
-                        $"(queryResultFormat={data.QueryResultFormat ?? "<null>"}, hasRowType={data.RowType != null}, hasRowSet={data.RowSet != null}). " +
-                        "Async query responses and multi-statement requests are not supported."
-                }
-            ]
-        };
-
-    private async Task<QueryResult> CreateArrowStreamResultAsync(
-        SnowflakeQueryResponse data,
-        AuthenticationToken authToken,
-        int prefetchConcurrency,
-        CancellationToken cancellationToken)
-    {
-        var arrayStream = await ChunkedArrowArrayStream.CreateAsync(
-            _apiClient,
-            authToken,
-            data.RowSetBase64,
-            data.Chunks,
-            data.ChunkHeaders,
-            data.Qrmk,
-            cancellationToken,
-            prefetchConcurrency).ConfigureAwait(false);
-
-        // Apply Snowflake-specific result fixups (e.g. rescaling FIXED-with-scale integer
-        // columns to Decimal128) before exposing the stream.
-        var resultStream = new SnowflakeResultArrowStream(arrayStream);
-
-        return new QueryResult
-        {
-            Status = QueryStatus.Success,
-            ResultStream = resultStream,
-            RowCount = data.Returned ?? 0
-        };
-    }
+        QueryResult.Failed(response.Code ?? "UNKNOWN", response.Message ?? "Query execution failed.");
 
     /// <inheritdoc/>
     public async Task<PreparedStatement> DescribeAsync(
@@ -456,34 +159,8 @@ internal class QueryExecutor : IQueryExecutor
 
         return new PreparedStatement
         {
-            ResultSchema = BuildSchemaFromRowType(response.Data.RowType)
+            ResultSchema = _resultFactory.BuildSchemaFromRowType(response.Data.RowType)
         };
-    }
-
-    private Schema? BuildSchemaFromRowType(List<RowType>? rowTypes)
-    {
-        if (rowTypes == null || rowTypes.Count == 0)
-            return null;
-
-        var fields = new List<Field>(rowTypes.Count);
-        foreach (RowType rowType in rowTypes)
-        {
-            var snowflakeType = new SnowflakeDataType
-            {
-                TypeName = rowType.Type ?? string.Empty,
-                Precision = rowType.Precision,
-                Scale = rowType.Scale,
-                Length = rowType.Length,
-                IsNullable = rowType.Nullable ?? true
-            };
-
-            fields.Add(new Field(
-                rowType.Name ?? string.Empty,
-                _typeConverter.ConvertSnowflakeTypeToArrow(snowflakeType),
-                rowType.Nullable ?? true));
-        }
-
-        return new Schema(fields, null);
     }
 
     private SnowflakeQueryRequestBody BuildQueryRequest(QueryRequest request, out string endpoint, bool describeOnly = false)

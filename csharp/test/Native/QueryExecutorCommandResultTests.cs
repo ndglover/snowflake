@@ -144,6 +144,33 @@ public class QueryExecutorCommandResultTests
     }
 
     [Fact]
+    public async Task ExecuteQueryAsync_MultiRowDmlSummary_SumsAndSurfacesAllRows()
+    {
+        // DML summaries are normally a single row, but the driver must not silently drop
+        // extra rows if the server ever sends them.
+        SetupQueryResponse(new SnowflakeQueryResponse
+        {
+            QueryResultFormat = "json",
+            Returned = 2,
+            RowType = [new RowType { Name = "number of rows inserted", Type = "fixed" }],
+            RowSet = [["2"], ["3"]],
+        });
+
+        Services.Query.QueryResult result = await _sut.ExecuteQueryAsync(Request(CreateToken()));
+
+        Assert.Equal(5, result.AffectedRows);
+        Assert.NotNull(result.ResultStream);
+
+        using var stream = result.ResultStream;
+        using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+        Assert.NotNull(batch);
+        Assert.Equal(2, batch.Length);
+        var column = (Int64Array)batch.Column(0);
+        Assert.Equal(2L, column.GetValue(0));
+        Assert.Equal(3L, column.GetValue(1));
+    }
+
+    [Fact]
     public async Task ExecuteQueryAsync_JsonDdlStatus_ReturnsStatusRowAsStrings()
     {
         // DDL status results (e.g. CREATE TABLE) arrive as a JSON rowset; parity with the Go
@@ -281,7 +308,7 @@ public class QueryExecutorCommandResultTests
         });
 
         var ex = await Assert.ThrowsAsync<Apache.Arrow.Adbc.AdbcException>(
-            () => statement.ExecuteUpdateAsync());
+            statement.ExecuteUpdateAsync);
         Assert.Contains("cancelled", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 

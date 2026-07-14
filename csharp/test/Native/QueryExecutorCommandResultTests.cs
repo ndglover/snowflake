@@ -243,7 +243,10 @@ public class QueryExecutorCommandResultTests
         var pooledConnection = Substitute.For<IPooledConnection>();
         pooledConnection.AuthToken.Returns(CreateToken());
 
-        var statement = new SnowflakeStatement(new ConnectionConfig(), pooledConnection, executor);
+        var connection = new SnowflakeConnection(new ConnectionConfig(),
+            Substitute.For<IConnectionPoolManager>(), pooledConnection, executor,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SnowflakeConnection>.Instance);
+        var statement = (SnowflakeStatement)connection.CreateStatement();
         statement.SqlQuery = "INSERT INTO T VALUES (1), (2)";
         return statement;
     }

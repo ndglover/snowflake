@@ -324,7 +324,8 @@ public class ConnectionStringParserTests
             { "adbc.connection.db_schema", "CONN_SCHEMA" },
         };
 
-        var config = ConnectionStringParser.ParseParameters(connectionParams, databaseDefaults);
+        var config = ConnectionStringParser.ParseParameters(
+            ConnectionStringParser.MergeParameters(connectionParams, databaseDefaults));
 
         Assert.Equal("CONN_DB", config.Database);
         Assert.Equal("CONN_SCHEMA", config.Schema);
@@ -410,7 +411,8 @@ public class ConnectionStringParserTests
         };
 
         // Act
-        var config = ConnectionStringParser.ParseParameters(connectionParams, databaseParams);
+        var config = ConnectionStringParser.ParseParameters(
+            ConnectionStringParser.MergeParameters(connectionParams, databaseParams));
 
         // Assert
         Assert.NotNull(config);
@@ -439,7 +441,8 @@ public class ConnectionStringParserTests
         };
 
         // Act
-        var config = ConnectionStringParser.ParseParameters(connectionParams, databaseParams);
+        var config = ConnectionStringParser.ParseParameters(
+            ConnectionStringParser.MergeParameters(connectionParams, databaseParams));
 
         // Assert
         Assert.NotNull(config);

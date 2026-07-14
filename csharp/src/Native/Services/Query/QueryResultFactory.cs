@@ -75,7 +75,7 @@ internal sealed class QueryResultFactory(IRestApiClient apiClient, ITypeConverte
         int prefetchConcurrency,
         CancellationToken cancellationToken)
     {
-        return shape switch
+        QueryResult result = shape switch
         {
             ResultShape.ArrowData => await CreateArrowStreamResultAsync(data, authToken, prefetchConcurrency, cancellationToken).ConfigureAwait(false),
             ResultShape.EmptyArrow => CreateEmptyArrowResult(data),
@@ -84,6 +84,9 @@ internal sealed class QueryResultFactory(IRestApiClient apiClient, ITypeConverte
             ResultShape.Unsupported => CreateUnsupportedShapeResult(data),
             _ => throw new NotSupportedException($"Result shape {shape} has no handler.")
         };
+
+        result.QueryId = data.QueryId;
+        return result;
     }
 
     private static bool HasArrowData(SnowflakeQueryResponse data) =>

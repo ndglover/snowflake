@@ -172,7 +172,10 @@ public class QueryExecutorEmptyResultTests
         var pooledConnection = Substitute.For<IPooledConnection>();
         pooledConnection.AuthToken.Returns(CreateToken());
 
-        using var statement = new SnowflakeStatement(new ConnectionConfig(), pooledConnection, executor);
+        var connection = new SnowflakeConnection(new ConnectionConfig(),
+            Substitute.For<IConnectionPoolManager>(), pooledConnection, executor,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SnowflakeConnection>.Instance);
+        using var statement = (SnowflakeStatement)connection.CreateStatement();
         statement.SqlQuery = "SELECT ID FROM T WHERE 1 = 0";
 
         Apache.Arrow.Adbc.QueryResult result = await statement.ExecuteQueryAsync();

@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using AdbcDrivers.Snowflake.Native.Configuration;
 using AdbcDrivers.Snowflake.Native.Services.ConnectionPool;
@@ -30,6 +31,7 @@ using AdbcDrivers.Snowflake.Native.Services.TypeConversion;
 
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Tracing;
 
 // Disambiguate from AdbcDrivers.Snowflake.Native.Services.Query.QueryResult.
 using QueryResult = Apache.Arrow.Adbc.QueryResult;
@@ -37,10 +39,13 @@ using QueryResult = Apache.Arrow.Adbc.QueryResult;
 namespace AdbcDrivers.Snowflake.Native;
 
 /// <summary>
-/// Snowflake statement implementation for ADBC.
+/// Snowflake statement implementation for ADBC. Executions publish telemetry spans through
+/// the connection's ActivitySource (see <see cref="SnowflakeConnection"/>), always tagged
+/// with Snowflake's queryId; SQL text rides along only when the connection opts in.
 /// </summary>
-public sealed class SnowflakeStatement : AdbcStatement
+public sealed class SnowflakeStatement : TracingStatement
 {
+    private readonly SnowflakeConnection _connection;
     private readonly ConnectionConfig _config;
     private readonly IPooledConnection _pooledConnection;
     private readonly IQueryExecutor _queryExecutor;
@@ -54,18 +59,66 @@ public sealed class SnowflakeStatement : AdbcStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="SnowflakeStatement"/> class.
     /// </summary>
+    /// <param name="connection">The owning connection (supplies the telemetry trace).</param>
     /// <param name="config">The connection configuration.</param>
     /// <param name="pooledConnection">The pooled connection.</param>
     /// <param name="queryExecutor">The query executor.</param>
     internal SnowflakeStatement(
+        SnowflakeConnection connection,
         ConnectionConfig config,
         IPooledConnection pooledConnection,
         IQueryExecutor queryExecutor)
+        : base(connection)
     {
+        _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _pooledConnection = pooledConnection ?? throw new ArgumentNullException(nameof(pooledConnection));
         _queryExecutor = queryExecutor ?? throw new ArgumentNullException(nameof(queryExecutor));
         _typeConverter = TypeConverter.Shared;
+    }
+
+    /// <inheritdoc/>
+    public override string AssemblyName => _connection.AssemblyName;
+
+    /// <inheritdoc/>
+    public override string AssemblyVersion => _connection.AssemblyVersion;
+
+    /// <summary>
+    /// Sets a statement option. Supported: <see cref="AdbcOptions.Telemetry.TraceParent"/> —
+    /// re-links this statement's spans to the caller's current distributed trace (long-lived
+    /// statements serve many traces).
+    /// </summary>
+    public override void SetOption(string key, string value)
+    {
+        ThrowIfDisposed();
+
+        if (string.Equals(key, AdbcOptions.Telemetry.TraceParent, StringComparison.Ordinal))
+        {
+            SetTraceParent(string.IsNullOrWhiteSpace(value) ? null : value);
+            return;
+        }
+
+        base.SetOption(key, value);
+    }
+
+    /// <summary>
+    /// Tags common statement attributes: the database namespace, and — only when the
+    /// connection opted in — the SQL text (queryId is tagged after execution instead, as the
+    /// privacy-safe join key to QUERY_HISTORY).
+    /// </summary>
+    private void TagStatement(Activity? activity)
+    {
+        if (activity == null)
+            return;
+
+        if (!string.IsNullOrEmpty(_config.Database))
+        {
+            activity.SetTag(SemanticConventions.Namespace,
+                string.IsNullOrEmpty(_config.Schema) ? _config.Database : $"{_config.Database}.{_config.Schema}");
+        }
+
+        if (_connection.IncludeQueryTextInTraces)
+            activity.SetTag(SemanticConventions.Db.Query.Text, SqlQuery);
     }
 
     /// <summary>
@@ -104,51 +157,68 @@ public sealed class SnowflakeStatement : AdbcStatement
         if (string.IsNullOrWhiteSpace(SqlQuery))
             throw new InvalidOperationException("SQL query must be set before execution.");
 
-        try
+        return await this.TraceActivityAsync(async activity =>
         {
-            // Build query request
-            var request = new QueryRequest
+            TagStatement(activity);
+            try
             {
-                Statement = SqlQuery,
-                Database = _config.Database,
-                Schema = _config.Schema,
-                Warehouse = _config.Warehouse,
-                Role = _config.Role,
-                Timeout = _config.QueryTimeout,
-                PrefetchConcurrency = _config.PrefetchConcurrency,
-                RequestId = NewRequestId(),
-                AuthToken = _pooledConnection.AuthToken
-            };
+                var request = BuildRequest();
 
-            // Add bound parameters if any
-            if (_boundParameters != null)
-            {
-                var parameterSet = _typeConverter.ConvertArrowBatchToParameters(_boundParameters);
-                foreach (var kvp in parameterSet.Parameters)
-                    request.Bindings[kvp.Key] = kvp.Value;
+                var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
+
+                if (result.Status == QueryStatus.Cancelled)
+                    throw new AdbcException("Query was cancelled.");
+
+                if (result.Status != QueryStatus.Success)
+                    throw ToAdbcException("Query failed", result);
+
+                activity?.SetTag(SemanticConventions.Db.Response.OperationId, result.QueryId);
+                activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
+
+                // Every Success shape from the executor carries a stream (unsupported response
+                // shapes fail before reaching here). The reader wrapper spans batch reads so
+                // fetch time is visible separately from execution time.
+                return new QueryResult(result.RowCount, new SnowflakeTracingReader(this, result.ResultStream!));
             }
+            catch (AdbcException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new AdbcException($"Query execution failed: {ex.Message}", ex);
+            }
+        }).ConfigureAwait(false);
+    }
 
-            // Execute query
-            var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
-
-            if (result.Status == QueryStatus.Cancelled)
-                throw new AdbcException("Query was cancelled.");
-
-            if (result.Status != QueryStatus.Success)
-                throw ToAdbcException("Query failed", result);
-
-            // Every Success shape from the executor carries a stream (unsupported response
-            // shapes fail before reaching here).
-            return new QueryResult(result.RowCount, result.ResultStream!);
-        }
-        catch (AdbcException)
+    /// <summary>
+    /// Builds the query request for the current SqlQuery, recording the request id for
+    /// Cancel and attaching any bound parameters.
+    /// </summary>
+    private QueryRequest BuildRequest()
+    {
+        var request = new QueryRequest
         {
-            throw;
-        }
-        catch (Exception ex)
+            // Callers validate SqlQuery is set before building the request.
+            Statement = SqlQuery!,
+            Database = _config.Database,
+            Schema = _config.Schema,
+            Warehouse = _config.Warehouse,
+            Role = _config.Role,
+            Timeout = _config.QueryTimeout,
+            PrefetchConcurrency = _config.PrefetchConcurrency,
+            RequestId = NewRequestId(),
+            AuthToken = _pooledConnection.AuthToken
+        };
+
+        if (_boundParameters != null)
         {
-            throw new AdbcException($"Query execution failed: {ex.Message}", ex);
+            var parameterSet = _typeConverter.ConvertArrowBatchToParameters(_boundParameters);
+            foreach (var kvp in parameterSet.Parameters)
+                request.Bindings[kvp.Key] = kvp.Value;
         }
+
+        return request;
     }
 
     /// <summary>
@@ -172,57 +242,43 @@ public sealed class SnowflakeStatement : AdbcStatement
         if (string.IsNullOrWhiteSpace(SqlQuery))
             throw new InvalidOperationException("SQL query must be set before execution.");
 
-        try
+        return await this.TraceActivityAsync(async activity =>
         {
-            // Build query request
-            var request = new QueryRequest
+            TagStatement(activity);
+            try
             {
-                Statement = SqlQuery,
-                Database = _config.Database,
-                Schema = _config.Schema,
-                Warehouse = _config.Warehouse,
-                Role = _config.Role,
-                Timeout = _config.QueryTimeout,
-                PrefetchConcurrency = _config.PrefetchConcurrency,
-                RequestId = NewRequestId(),
-                AuthToken = _pooledConnection.AuthToken
-            };
+                var request = BuildRequest();
 
-            // Add bound parameters if any
-            if (_boundParameters != null)
-            {
-                var parameterSet = _typeConverter.ConvertArrowBatchToParameters(_boundParameters);
-                foreach (var kvp in parameterSet.Parameters)
-                    request.Bindings[kvp.Key] = kvp.Value;
+                var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
+
+                if (result.Status == QueryStatus.Cancelled)
+                    throw new AdbcException("Update was cancelled.");
+
+                if (result.Status != QueryStatus.Success)
+                    throw ToAdbcException("Update failed", result);
+
+                // DML statements report the affected-row count parsed from the JSON row-count
+                // summary in QueryExecutor. Any other statement (SELECT, DDL status rows, ...)
+                // affects no rows, so report -1 (unknown/not applicable) per the ADBC contract.
+                long affectedRows = result.AffectedRows ?? -1;
+
+                activity?.SetTag(SemanticConventions.Db.Response.OperationId, result.QueryId);
+                activity?.SetTag("snowflake.affected_rows", affectedRows);
+
+                // ExecuteUpdate has no use for the result set (DML/DDL surface theirs for
+                // ExecuteQuery); release it rather than hold the batch until finalization.
+                result.ResultStream?.Dispose();
+                return new UpdateResult(affectedRows);
             }
-
-            // Execute update
-            var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
-
-            if (result.Status == QueryStatus.Cancelled)
-                throw new AdbcException("Update was cancelled.");
-
-            if (result.Status != QueryStatus.Success)
-                throw ToAdbcException("Update failed", result);
-
-            // DML statements report the affected-row count parsed from the JSON row-count
-            // summary in QueryExecutor. Any other statement (SELECT, DDL status rows, ...)
-            // affects no rows, so report -1 (unknown/not applicable) per the ADBC contract.
-            long affectedRows = result.AffectedRows ?? -1;
-
-            // ExecuteUpdate has no use for the result set (DML/DDL surface theirs for
-            // ExecuteQuery); release it rather than hold the batch until finalization.
-            result.ResultStream?.Dispose();
-            return new UpdateResult(affectedRows);
-        }
-        catch (AdbcException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new AdbcException($"Update execution failed: {ex.Message}", ex);
-        }
+            catch (AdbcException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new AdbcException($"Update execution failed: {ex.Message}", ex);
+            }
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -244,7 +300,8 @@ public sealed class SnowflakeStatement : AdbcStatement
         if (string.IsNullOrEmpty(requestId))
             return;
 
-        await _queryExecutor.CancelQueryAsync(requestId, _pooledConnection.AuthToken).ConfigureAwait(false);
+        await this.TraceActivityAsync(
+            _ => _queryExecutor.CancelQueryAsync(requestId, _pooledConnection.AuthToken)).ConfigureAwait(false);
     }
 
     // Generates and records the request id for the execution that is about to start, so a
@@ -301,18 +358,19 @@ public sealed class SnowflakeStatement : AdbcStatement
     }
 
     /// <summary>
-    /// Disposes the statement and releases any resources.
+    /// Disposes the statement and releases any resources. (The tracing base class owns
+    /// <c>Dispose()</c> and routes here.)
     /// </summary>
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        if (!_disposed)
+        if (disposing && !_disposed)
         {
             _boundParameters?.Dispose();
             _boundParameters = null;
 
             _disposed = true;
         }
-        base.Dispose();
+        base.Dispose(disposing);
     }
 
     private void ThrowIfDisposed()

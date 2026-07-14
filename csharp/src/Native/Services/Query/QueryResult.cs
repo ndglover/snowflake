@@ -33,6 +33,12 @@ internal class QueryResult
     public long? AffectedRows { get; set; }
 
     /// <summary>
+    /// Gets or sets Snowflake's query id for the executed statement — the join key to the
+    /// server's QUERY_HISTORY, and the id surfaced on telemetry spans.
+    /// </summary>
+    public string? QueryId { get; set; }
+
+    /// <summary>
     /// Gets or sets any errors that occurred during execution.
     /// </summary>
     public List<QueryError> Errors { get; set; } = [];

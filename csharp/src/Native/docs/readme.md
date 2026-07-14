@@ -85,6 +85,31 @@ the connector-net-style spellings in parentheses are accepted as aliases:
 `auth_okta`, `auth_mfa`, and `auth_wif` are recognized as canonical ADBC values but not yet
 supported (see the TODO's parity-gap list).
 
+### Telemetry (OpenTelemetry tracing)
+
+The driver publishes spans through a `System.Diagnostics.ActivitySource` per the ADBC tracing
+standard — no exporter dependency ships in the driver, and with no subscriber the tracing calls
+are no-ops. Consumers opt in from their own OpenTelemetry setup:
+
+```csharp
+Sdk.CreateTracerProviderBuilder()
+    .AddSource("AdbcDrivers.Snowflake.Native")   // the driver's ActivitySource name
+    .AddOtlpExporter()
+    .Build();
+```
+
+Spans cover connection open (pool wait + login, tagged with auth type and session id),
+`ExecuteQuery`/`ExecuteUpdate` (tagged with `db.namespace` and Snowflake's queryId as
+`db.response.operation_id` — the join key to `QUERY_HISTORY`), batch reads, transaction
+operations, `GetTableSchema`, and `GetObjects` (one child span per metadata query). Spans nest
+under the caller's ambient `Activity` automatically.
+
+| Telemetry option | Meaning | Default |
+|-----|---------|---------|
+| `adbc.telemetry.trace_parent` | W3C traceparent to link spans to a caller's distributed trace (cross-process handoff); settable on connect and per-statement via `SetOption` | ambient `Activity.Current` |
+| `adbc.snowflake.telemetry.activity_source` | Override the ActivitySource name — for apps whose telemetry bootstrap subscribes to a fixed source list they cannot change. The spans then carry that name as their instrumentation scope. | `AdbcDrivers.Snowflake.Native` |
+| `adbc.snowflake.telemetry.include_query_text` | Emit SQL text on spans as `db.query.text`. Off by default: query text can embed literals/PII and outlives the process in trace backends; queryId is always emitted as the privacy-safe join key. | `false` |
+
 ### ADO.NET client
 
 The driver also works behind the `Apache.Arrow.Adbc.Client` `DbConnection` layer:

@@ -38,64 +38,151 @@ using AdbcDrivers.Snowflake.Native.Services.Query;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Extensions;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Snowflake.Native;
 
 /// <summary>
-/// Snowflake connection implementation for ADBC.
+/// Snowflake connection implementation for ADBC. Publishes telemetry spans through the ADBC
+/// tracing standard (<see cref="TracingConnection"/>): consumers subscribe with
+/// OpenTelemetry's <c>AddSource</c> using the driver's activity-source name; with no
+/// subscriber the tracing calls are no-ops.
 /// </summary>
-public sealed partial class SnowflakeConnection : AdbcConnection
+public sealed partial class SnowflakeConnection : TracingConnection
 {
+    /// <summary>The default ActivitySource name consumers subscribe to.</summary>
+    internal const string DefaultActivitySourceName = "AdbcDrivers.Snowflake.Native";
+
+    /// <summary>
+    /// Option overriding the ActivitySource name — for apps whose telemetry bootstrap
+    /// subscribes to a fixed set of sources they cannot change. Note the spans then carry
+    /// that name as their instrumentation scope instead of the driver's own.
+    /// </summary>
+    internal const string ActivitySourceNameOption = "adbc.snowflake.telemetry.activity_source";
+
+    /// <summary>
+    /// Option (default false) to include SQL text on spans as <c>db.query.text</c>. Off by
+    /// default because query text can embed literals/PII and outlives the process in trace
+    /// backends; Snowflake's queryId is always emitted as the privacy-safe join key.
+    /// </summary>
+    internal const string IncludeQueryTextOption = "adbc.snowflake.telemetry.include_query_text";
+
+    private static readonly string DriverAssemblyVersion =
+        typeof(SnowflakeConnection).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyProperties =
+        new Dictionary<string, string>();
+
+    // The TracingConnection base ctor names its ActivitySource from the virtual AssemblyName,
+    // which it calls before this type's ctor body runs — too early for an instance field set
+    // from the ctor arguments. The override is therefore staged in a ThreadStatic by the
+    // base-argument helper and cached into the instance on AssemblyName's first read.
+    [ThreadStatic]
+    private static string? t_pendingActivitySourceName;
+    private string? _activitySourceName;
+
     private readonly ConnectionConfig _config;
     private readonly IConnectionPoolManager _connectionPool;
     private IPooledConnection? _pooledConnection;
-    private readonly IQueryExecutor? _queryExecutor;
+    private IQueryExecutor? _queryExecutor;
     private bool _disposed;
     private bool _autocommit = true;
     private readonly ILogger<SnowflakeConnection> _logger;
 
-    internal SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool,
-        IPooledConnection pooledConnection, IQueryExecutor queryExecutor,
-        ILogger<SnowflakeConnection> logger)
+    internal SnowflakeConnection(ConnectionConfig config, IReadOnlyDictionary<string, string> properties,
+        IConnectionPoolManager connectionPool, ILogger<SnowflakeConnection> logger)
+        : base(StashActivitySourceName(properties))
     {
+        t_pendingActivitySourceName = null;
         _config = config;
         _connectionPool = connectionPool;
-        _pooledConnection = pooledConnection;
-        _queryExecutor = queryExecutor;
         _logger = logger;
+
+        properties.TryGetValue(IncludeQueryTextOption, out string? includeQueryText);
+        IncludeQueryTextInTraces = string.Equals(includeQueryText, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// Asynchronously creates and initializes a new SnowflakeConnection. The token cancels the
+    /// Seeds a fully-open connection directly — the composition point for unit tests.
+    /// </summary>
+    internal SnowflakeConnection(ConnectionConfig config, IConnectionPoolManager connectionPool,
+        IPooledConnection pooledConnection, IQueryExecutor queryExecutor,
+        ILogger<SnowflakeConnection> logger, IReadOnlyDictionary<string, string>? properties = null)
+        : this(config, properties ?? EmptyProperties, connectionPool, logger)
+    {
+        _pooledConnection = pooledConnection;
+        _queryExecutor = queryExecutor;
+    }
+
+    private static IReadOnlyDictionary<string, string> StashActivitySourceName(IReadOnlyDictionary<string, string> properties)
+    {
+        properties.TryGetValue(ActivitySourceNameOption, out string? name);
+        t_pendingActivitySourceName = string.IsNullOrWhiteSpace(name) ? null : name;
+        return properties;
+    }
+
+    /// <inheritdoc/>
+    public override string AssemblyName => _activitySourceName ??= t_pendingActivitySourceName ?? DefaultActivitySourceName;
+
+    /// <inheritdoc/>
+    public override string AssemblyVersion => DriverAssemblyVersion;
+
+    /// <summary>Whether spans may carry SQL text (see <see cref="IncludeQueryTextOption"/>).</summary>
+    internal bool IncludeQueryTextInTraces { get; }
+
+    /// <summary>
+    /// Asynchronously creates and opens a new SnowflakeConnection. The token cancels the
     /// wait for pool capacity and the login round trip.
     /// </summary>
-    internal static async Task<SnowflakeConnection> CreateAsync(ConnectionConfig config, HttpClient httpClient, IConnectionPoolManager connectionPool, ILoggerFactory? loggerFactory = null,
+    internal static async Task<SnowflakeConnection> CreateAsync(ConnectionConfig config,
+        IReadOnlyDictionary<string, string> properties, HttpClient httpClient,
+        IConnectionPoolManager connectionPool, ILoggerFactory? loggerFactory = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(connectionPool);
         loggerFactory ??= NullLoggerFactory.Instance;
-        var log = loggerFactory.CreateLogger<SnowflakeConnection>();
 
-        log.LogDebug("Acquiring pooled connection for user {User} account {Account}", config.User, config.Account);
-        var pooledConnection = await connectionPool.AcquireConnectionAsync(config, cancellationToken).ConfigureAwait(false);
-        if (pooledConnection is null)
+        var connection = new SnowflakeConnection(config, properties, connectionPool,
+            loggerFactory.CreateLogger<SnowflakeConnection>());
+        try
         {
-            throw new AdbcException("Failed to acquire pooled connection.");
+            await connection.OpenAsync(httpClient, loggerFactory, cancellationToken).ConfigureAwait(false);
+            return connection;
         }
-        log.LogInformation("Acquired pooled connection {ConnectionId}", pooledConnection.ConnectionId);
-
-        var apiClient = new RestApiClient(httpClient, config.EnableCompression);
-        var typeConverter = TypeConverter.Shared;
-        
-        var queryExecutor = new QueryExecutor(apiClient, typeConverter, config.Account, config.Network,
-            loggerFactory.CreateLogger<QueryExecutor>(), () => pooledConnection.IsFaulted = true);
-
-        return new SnowflakeConnection(config, connectionPool, pooledConnection, queryExecutor, log);
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 
-    /// <summary>AdbcDatabaseAdbcDatabase
+    /// <summary>
+    /// Acquires the pooled session (logging in if the pool creates a fresh connection) and
+    /// builds the query executor. Spanned as the connection-open operation: its duration is
+    /// pool wait + login round trip.
+    /// </summary>
+    private async Task OpenAsync(HttpClient httpClient, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+    {
+        await this.TraceActivityAsync(async activity =>
+        {
+            activity?.SetTag("snowflake.auth_type", _config.Authentication.Type.ToString());
+
+            _logger.LogDebug("Acquiring pooled connection for user {User} account {Account}", _config.User, _config.Account);
+            IPooledConnection pooled = await _connectionPool.AcquireConnectionAsync(_config, cancellationToken).ConfigureAwait(false)
+                ?? throw new AdbcException("Failed to acquire pooled connection.");
+            _pooledConnection = pooled;
+            _logger.LogInformation("Acquired pooled connection {ConnectionId}", pooled.ConnectionId);
+            activity?.SetTag(SemanticConventions.Db.Client.Connection.SessionId, pooled.AuthToken.SessionId);
+
+            var apiClient = new RestApiClient(httpClient, _config.EnableCompression);
+            _queryExecutor = new QueryExecutor(apiClient, TypeConverter.Shared, _config.Account, _config.Network,
+                loggerFactory.CreateLogger<QueryExecutor>(), () => pooled.IsFaulted = true);
+        }, activityName: "OpenConnection").ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Creates a new statement for executing queries.
     /// </summary>
     /// <returns>An AdbcStatement instance.</returns>
@@ -106,7 +193,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         if (_pooledConnection == null || _queryExecutor == null)
             throw new AdbcException("Connection is not properly initialized.");
 
-        return new SnowflakeStatement(_config, _pooledConnection, _queryExecutor);
+        return new SnowflakeStatement(this, _config, _pooledConnection, _queryExecutor);
     }
 
     /// <summary>
@@ -199,10 +286,15 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             AuthToken = _pooledConnection.AuthToken
         };
         
-        PreparedStatement prepared = _queryExecutor.DescribeAsync(request).GetAwaiter().GetResult();
+        return this.TraceActivity(activity =>
+        {
+            activity?.SetTag(SemanticConventions.Db.Collection.Name, fullyQualifiedTable);
 
-        return prepared.ResultSchema
-            ?? throw new AdbcException($"Unable to determine schema for table '{tableName}'.");
+            PreparedStatement prepared = _queryExecutor.DescribeAsync(request).GetAwaiter().GetResult();
+
+            return prepared.ResultSchema
+                ?? throw new AdbcException($"Unable to determine schema for table '{tableName}'.");
+        });
     }
 
     /// <summary>
@@ -334,27 +426,38 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     }
 
     /// <summary>
-    /// Sets a connection option. Supported: <see cref="AdbcOptions.Connection.Autocommit"/>.
-    /// Snowflake sessions default to autocommit on; disabling it opens a transaction scope
-    /// that <see cref="Commit"/> / <see cref="Rollback"/> end. Re-enabling autocommit first
-    /// commits any pending work (the ADBC contract).
+    /// Sets a connection option. Supported: <see cref="AdbcOptions.Connection.Autocommit"/>
+    /// (Snowflake sessions default to autocommit on; disabling it opens a transaction scope
+    /// that <see cref="Commit"/> / <see cref="Rollback"/> end, and re-enabling first commits
+    /// any pending work per the ADBC contract) and
+    /// <see cref="AdbcOptions.Telemetry.TraceParent"/> (re-links subsequent spans to the
+    /// caller's current distributed trace).
     /// </summary>
     public override void SetOption(string key, string value)
     {
         ThrowIfDisposed();
 
+        if (string.Equals(key, AdbcOptions.Telemetry.TraceParent, StringComparison.Ordinal))
+        {
+            SetTraceParent(string.IsNullOrWhiteSpace(value) ? null : value);
+            return;
+        }
+
         if (!string.Equals(key, AdbcOptions.Connection.Autocommit, StringComparison.Ordinal))
             throw AdbcException.NotImplemented($"Option '{key}' is not supported.");
 
-        bool enable = AdbcOptions.GetEnabled(value);
-        if (enable == _autocommit)
-            return;
+        this.TraceActivity(_ =>
+        {
+            bool enable = AdbcOptions.GetEnabled(value);
+            if (enable == _autocommit)
+                return;
 
-        if (enable)
-            ExecuteSessionStatement("COMMIT");
+            if (enable)
+                ExecuteSessionStatement("COMMIT");
 
-        ExecuteSessionStatement($"ALTER SESSION SET AUTOCOMMIT = {(enable ? "TRUE" : "FALSE")}");
-        _autocommit = enable;
+            ExecuteSessionStatement($"ALTER SESSION SET AUTOCOMMIT = {(enable ? "TRUE" : "FALSE")}");
+            _autocommit = enable;
+        }, activityName: "SetAutocommit");
     }
 
     /// <summary>
@@ -364,7 +467,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     {
         ThrowIfDisposed();
         ThrowIfAutocommit();
-        ExecuteSessionStatement("COMMIT");
+        this.TraceActivity(_ => ExecuteSessionStatement("COMMIT"));
     }
 
     /// <summary>
@@ -374,7 +477,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     {
         ThrowIfDisposed();
         ThrowIfAutocommit();
-        ExecuteSessionStatement("ROLLBACK");
+        this.TraceActivity(_ => ExecuteSessionStatement("ROLLBACK"));
     }
 
     private void ThrowIfAutocommit()
@@ -412,11 +515,12 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     }
 
     /// <summary>
-    /// Disposes the connection and releases any resources.
+    /// Disposes the connection and releases any resources. (The tracing base class owns
+    /// <c>Dispose()</c> and routes here; it disposes the ActivitySource after this runs.)
     /// </summary>
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        if (!_disposed)
+        if (disposing && !_disposed)
         {
             if (_pooledConnection != null)
             {
@@ -429,7 +533,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
             _logger.LogDebug("Disposing SnowflakeConnection for account {Account}", _config.Account);
             _disposed = true;
         }
-        base.Dispose();
+        base.Dispose(disposing);
     }
 
     /// <summary>

@@ -13,9 +13,13 @@ _None outstanding._
 
 ## Tier 3 — Hygiene / decisions
 
-- [ ] **Observability — two separate concerns (deferred, decide approach later):**
-  - **Logging (diagnostic messages, `ILogger`):** used internally, injected via the `SnowflakeDatabase` ctor `ILoggerFactory`. Works for consumers that construct the database directly, but **not** through the ADBC-standard `AdbcDriver.Open(IReadOnlyDictionary<string,string>)` — a factory is an object and can't ride a string dict. To formalize: thread the factory to the components that lack one (pool, `RestApiClient`) and document how to pass it.
-  - **Telemetry (tracing/spans):** the ADBC C# standard is OpenTelemetry via `System.Diagnostics.ActivitySource` (`Apache.Arrow.Adbc.Tracing`: `TracingConnection`/`TracingStatement`/`IActivityTracer`, `…trace_parent` option). Listeners attach out-of-band, so this fits the string-dict `Open` that `ILogger` can't. Emit spans around connect/execute/fetch/renew.
+- [ ] **Observability — remaining work** (tracing phase 1 shipped 2026-07-11, see Resolved):
+  - **Logging (diagnostic messages, `ILogger`):** thread the `ILoggerFactory` to the components
+    that lack one (pool, `RestApiClient`) and document how to pass it. (A factory is an object
+    and can't ride the ADBC string-dict `Open` — construct `SnowflakeDatabase` directly.)
+  - **Tracing phase 2 (depth):** child spans inside `QueryExecutor` (post, renewal, each
+    query-in-progress poll) and per-chunk download spans in `ChunkedArrowArrayStream`; phase 1's
+    statement spans already bracket these ambient-parented.
   - (connector-net's file-based "easy logging" — `sf_client_config.json` `log_level`/`log_path` via `client_config_file` — is a third, Snowflake-ecosystem option; likely skip unless parity is wanted.)
 
 ## Scope decisions (confirm whether in scope for v1)
@@ -60,6 +64,16 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
 
 ## Resolved
 
+- [x] **OpenTelemetry tracing, phase 1 (2026-07-11)** — adopted the ADBC tracing standard:
+  `SnowflakeConnection : TracingConnection`, `SnowflakeStatement : TracingStatement`, spans over
+  connection open (pool wait + login; auth type + session id tags), execute/update (queryId as
+  `db.response.operation_id`, `db.namespace`, returned/affected rows), per-batch reads
+  (`SnowflakeTracingReader`), transactions, `GetTableSchema`, and `GetObjects` (child span per
+  metadata query, deliberately exposing the N+1 shape). Options: `adbc.telemetry.trace_parent`
+  (connect + statement `SetOption`), `adbc.snowflake.telemetry.activity_source` (source-name
+  override for fixed-subscription telemetry bootstraps), `adbc.snowflake.telemetry.include_query_text`
+  (SQL text opt-in; off by default for privacy — queryId is the join key). Zero cost with no
+  listener; no exporter dependency. Listener-based unit tests in `SnowflakeTracingTests`.
 - [x] **Programmatic access token auth (2026-07-11)** — `auth_type=auth_pat` (canonical; also
   `programmatic_access_token`/`pat`), token via the shared `…client_option.auth_token` option
   (`AuthenticationConfig.OAuthToken` renamed to `Token` accordingly). `PatAuthenticator` owns its

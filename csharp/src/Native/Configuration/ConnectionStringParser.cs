@@ -42,46 +42,45 @@ internal static class ConnectionStringParser
     private static readonly TimeSpan MaxHeartbeatFrequency = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// Parses ADBC parameters with connection-specific overrides into a ConnectionConfig object.
-    /// Connection parameters take precedence over database defaults.
+    /// Merges connection-specific parameters over database defaults (connection wins on
+    /// conflict) into one case-insensitive property bag — consumed by config parsing and,
+    /// separately, by the tracing layer (which reads telemetry keys the parser ignores).
     /// </summary>
     /// <param name="connectionParameters">Connection-specific parameters (take precedence).</param>
     /// <param name="databaseDefaults">Database default parameters.</param>
-    /// <returns>A configured ConnectionConfig object with merged parameters.</returns>
-    /// <exception cref="ArgumentException">Thrown when the parameters are invalid.</exception>
-    public static ConnectionConfig ParseParameters(
+    public static IReadOnlyDictionary<string, string> MergeParameters(
         IReadOnlyDictionary<string, string>? connectionParameters = null,
         IReadOnlyDictionary<string, string>? databaseDefaults = null)
     {
-        // If both are null, create empty dictionary (will fail validation)
-        if (connectionParameters == null && databaseDefaults == null)
-        {
-            return BuildConfig(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-        }
+        // Seed from the defaults, then overwrite with connection parameters — assignment
+        // gives the connection precedence without a per-key existence check.
+        var merged = databaseDefaults == null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(databaseDefaults, StringComparer.OrdinalIgnoreCase);
 
-        // If only one is provided, use it directly
-        if (databaseDefaults == null || databaseDefaults.Count == 0)
+        if (connectionParameters != null)
         {
-            return BuildConfig(new Dictionary<string, string>(connectionParameters!, StringComparer.OrdinalIgnoreCase));
-        }
-
-        if (connectionParameters == null || connectionParameters.Count == 0)
-        {
-            return BuildConfig(new Dictionary<string, string>(databaseDefaults, StringComparer.OrdinalIgnoreCase));
-        }
-
-        // Both provided - merge with connection parameters taking precedence
-        var merged = new Dictionary<string, string>(connectionParameters, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var kvp in databaseDefaults)
-        {
-            if (!merged.ContainsKey(kvp.Key))
-            {
+            foreach (var kvp in connectionParameters)
                 merged[kvp.Key] = kvp.Value;
-            }
         }
 
-        return BuildConfig(merged);
+        return merged;
+    }
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyParameters =
+        new Dictionary<string, string>();
+
+    /// <summary>
+    /// Parses an ADBC parameter bag into a ConnectionConfig. A caller holding both
+    /// connection-level and database-level parameters merges them first (see
+    /// <see cref="MergeParameters"/>); parsing itself neither merges nor copies.
+    /// </summary>
+    /// <param name="parameters">The (already merged) ADBC parameters.</param>
+    /// <returns>A configured ConnectionConfig object.</returns>
+    /// <exception cref="ArgumentException">Thrown when the parameters are invalid.</exception>
+    public static ConnectionConfig ParseParameters(IReadOnlyDictionary<string, string>? parameters = null)
+    {
+        return BuildConfig(parameters ?? EmptyParameters);
     }
 
     private static ConnectionConfig BuildConfig(IReadOnlyDictionary<string, string> parameters)

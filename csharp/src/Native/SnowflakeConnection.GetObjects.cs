@@ -31,6 +31,7 @@ using Apache.Arrow.Ipc;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Extensions;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Snowflake.Native;
@@ -52,10 +53,18 @@ public sealed partial class SnowflakeConnection
     {
         ThrowIfDisposed();
 
-        IArrowArray[] dataArrays = GetCatalogs(
-            depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern);
+        // The parent span brackets the whole hierarchy walk; each INFORMATION_SCHEMA query
+        // below appears as a child (RunMetadataQuery), deliberately exposing the current
+        // one-query-per-object shape.
+        return this.TraceActivity(activity =>
+        {
+            activity?.SetTag("adbc.get_objects.depth", depth.ToString());
 
-        return new InMemoryArrowStream(StandardSchemas.GetObjectsSchema, dataArrays);
+            IArrowArray[] dataArrays = GetCatalogs(
+                depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern);
+
+            return (IArrowArrayStream)new InMemoryArrowStream(StandardSchemas.GetObjectsSchema, dataArrays);
+        });
     }
 
     private IArrowArray[] GetCatalogs(GetObjectsDepth depth, string? catalogPattern, string? dbSchemaPattern,
@@ -360,6 +369,17 @@ public sealed partial class SnowflakeConnection
     /// the result rows as string dictionaries keyed by column name (case-insensitive).
     /// </summary>
     private List<Dictionary<string, string?>> RunMetadataQuery(string sql, IReadOnlyList<string?>? bindValues = null)
+    {
+        return this.TraceActivity(activity =>
+        {
+            // Metadata SQL is driver-generated (user input only ever rides as bind values),
+            // so the text is safe to emit unconditionally.
+            activity?.SetTag(SemanticConventions.Db.Query.Text, sql);
+            return RunMetadataQueryCore(sql, bindValues);
+        }, activityName: nameof(RunMetadataQuery));
+    }
+
+    private List<Dictionary<string, string?>> RunMetadataQueryCore(string sql, IReadOnlyList<string?>? bindValues)
     {
         if (_queryExecutor == null || _pooledConnection == null)
             throw new AdbcException("Connection is not properly initialized.");

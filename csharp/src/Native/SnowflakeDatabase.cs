@@ -102,8 +102,9 @@ public sealed class SnowflakeDatabase : AdbcDatabase
     public async Task<AdbcConnection> ConnectAsync(IReadOnlyDictionary<string, string>? parameters, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var config = ConnectionStringParser.ParseParameters(parameters, _parameters);
-        return await SnowflakeConnection.CreateAsync(config, _httpClient, _connectionPool, _loggerFactory, cancellationToken).ConfigureAwait(false);
+        IReadOnlyDictionary<string, string> properties = ConnectionStringParser.MergeParameters(parameters, _parameters);
+        var config = ConnectionStringParser.ParseParameters(properties);
+        return await SnowflakeConnection.CreateAsync(config, properties, _httpClient, _connectionPool, _loggerFactory, cancellationToken).ConfigureAwait(false);
     }
 
 

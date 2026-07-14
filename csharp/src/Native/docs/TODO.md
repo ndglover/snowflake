@@ -33,8 +33,8 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
   temporary stage → COPY INTO, with four ingest modes (Create/Append/Replace/CreateAppend),
   configurable write/upload/copy parallelism, compression codec selection, GeoArrow COPY
   transforms, and row-count verification. High impact for data-loading use cases.
-- [ ] **Additional auth methods** — MFA (`auth_mfa`), Programmatic Access Token (`auth_pat`),
-  Workload Identity Federation (`auth_wif`), native Okta URL (`auth_okta`).
+- [ ] **Additional auth methods** — MFA (`auth_mfa`), Workload Identity Federation
+  (`auth_wif`), native Okta URL (`auth_okta`). (PAT: supported as of 2026-07-11.)
 - [ ] **Statement features** — BindStream (streaming params), ExecuteSchema, query tag,
   `adbc.rpc.result_queue_size`, statement-level high-precision override, ingest options
   (`adbc.snowflake.statement.ingest_*`).
@@ -60,6 +60,14 @@ implement or explicitly skip. Items already tracked in the tiers above (transact
 
 ## Resolved
 
+- [x] **Programmatic access token auth (2026-07-11)** — `auth_type=auth_pat` (canonical; also
+  `programmatic_access_token`/`pat`), token via the shared `…client_option.auth_token` option
+  (`AuthenticationConfig.OAuthToken` renamed to `Token` accordingly). `PatAuthenticator` owns its
+  requirements (account, user, token — a PAT is user-bound, unlike OAuth) and logs in with
+  `authenticator=PROGRAMMATIC_ACCESS_TOKEN`; the PAT fingerprints into the pool key like other
+  static credentials. Live-tested via the `auth_pat` config block
+  (`ConnectionTests.OpenAndConnect_WithPat_Succeeds`; requires the user to be under a network
+  policy).
 - [x] **SSO browser-flow hardening (2026-07-11)** — the original item ("hardcodes port 8080";
   "GetContextAsync ignores cancellation") was largely fixed by the `3cd1c05` "Fix SSO login"
   commit: the redirect port is OS-assigned and the redirect wait honors the caller token plus a

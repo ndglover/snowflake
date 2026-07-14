@@ -56,9 +56,13 @@ internal class AuthenticationConfig
     public string? PrivateKeyPassphrase { get; set; }
 
     /// <summary>
-    /// Gets or sets the OAuth access token.
+    /// Gets or sets the access token for token-based authentication: an OAuth access token
+    /// (<see cref="AuthenticationType.OAuth"/>) or a programmatic access token
+    /// (<see cref="AuthenticationType.Pat"/>). Both arrive via the same ADBC option
+    /// (<c>adbc.snowflake.sql.client_option.auth_token</c>); the auth type decides how it is
+    /// presented to Snowflake.
     /// </summary>
-    public string? OAuthToken { get; set; }
+    public string? Token { get; set; }
 
     /// <summary>
     /// Gets or sets additional SSO properties.

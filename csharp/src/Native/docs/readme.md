@@ -70,14 +70,20 @@ Date32/64, Time32/64, Timestamp. Multi-row batches throw `NotSupportedException`
 
 ### Authentication
 
-Select with `adbc.snowflake.sql.auth_type`:
+Select with `adbc.snowflake.sql.auth_type`. Canonical values follow the
+[ADBC Snowflake driver reference](https://arrow.apache.org/adbc/current/driver/snowflake.html);
+the connector-net-style spellings in parentheses are accepted as aliases:
 
 | `auth_type` | Method | Additional keys |
 |---|---|---|
-| `snowflake` (default) | Username/password | `username`, `password` |
-| `snowflake_jwt` / `jwt` | RSA key pair | `…client_option.jwt_private_key` (path to PEM file) or `…client_option.jwt_private_key_pkcs8_value` (inline PEM), + `…_pkcs8_password` for encrypted keys |
-| `oauth` | OAuth 2.0 access token | `…client_option.auth_token` |
-| `externalbrowser` | Browser-based SSO | — |
+| `auth_snowflake` (`snowflake`) — default | Username/password | `username`, `password` |
+| `auth_jwt` (`snowflake_jwt`, `jwt`) | RSA key pair | `…client_option.jwt_private_key` (path to PEM file) or `…client_option.jwt_private_key_pkcs8_value` (inline PEM), + `…_pkcs8_password` for encrypted keys |
+| `auth_oauth` (`oauth`) | OAuth 2.0 access token | `…client_option.auth_token` |
+| `auth_pat` (`programmatic_access_token`, `pat`) | Programmatic access token (requires the user to be under a network policy) | `…client_option.auth_token` |
+| `auth_ext_browser` (`externalbrowser`) | Browser-based SSO | — |
+
+`auth_okta`, `auth_mfa`, and `auth_wif` are recognized as canonical ADBC values but not yet
+supported (see the TODO's parity-gap list).
 
 ### ADO.NET client
 
@@ -111,7 +117,7 @@ where an official key exists; pool keys are this driver's own (`adbc.snowflake.p
 | `adbc.snowflake.sql.auth_type` | See Authentication above | `snowflake` |
 | `adbc.snowflake.sql.client_option.jwt_private_key` | Key-pair auth: path to the private-key PEM file | — |
 | `adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value` / `_password` | Key-pair auth: inline PEM / passphrase for encrypted keys | — |
-| `adbc.snowflake.sql.client_option.auth_token` | OAuth access token | — |
+| `adbc.snowflake.sql.client_option.auth_token` | Access token (OAuth or PAT, per `auth_type`) | — |
 | `adbc.snowflake.sql.uri.host` / `.port` / `.protocol` | Endpoint override (PrivateLink etc.) | account URL |
 | `adbc.snowflake.sql.client_option.tls_skip_verify` | Skip TLS certificate validation (**test only**) | `false` |
 | `adbc.snowflake.sql.client_option.no_proxy` | Bypass the system proxy | `false` |

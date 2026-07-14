@@ -64,9 +64,10 @@ public sealed class SnowflakeDatabase : AdbcDatabase
         var basicAuth = new BasicAuthenticator(loginClient);
         var keyPairAuth = new KeyPairAuthenticator(loginClient);
         var oauthAuth = new OAuthAuthenticator(loginClient);
+        var patAuth = new PatAuthenticator(loginClient);
         var ssoAuth = new SsoAuthenticator(loginClient, _httpClient);
 
-        var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, ssoAuth);
+        var authService = new AuthenticationService(basicAuth, keyPairAuth, oauthAuth, patAuth, ssoAuth);
         var sessionClient = new SnowflakeSessionClient(loginClient, _httpClient, _loggerFactory);
         _connectionPool = new ConnectionPoolManager(authService, sessionClient);
     }

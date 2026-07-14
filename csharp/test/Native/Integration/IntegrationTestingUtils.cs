@@ -1,4 +1,4 @@
-/*
+﻿/*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
 * This file has been modified from its original version, which is
@@ -33,6 +33,23 @@ internal static class IntegrationTestingUtils
     internal static readonly IntegrationTestConfiguration TestConfiguration;
 
     internal const string SnowflakeTestConfigVariable = "SNOWFLAKE_TEST_CONFIG_FILE";
+
+    internal const string RunSlowTestsVariable = "SNOWFLAKE_RUN_SLOW_TESTS";
+
+    /// <summary>
+    /// True when deliberately slow tests (multi-minute wall-clock waits, e.g. the long-running
+    /// query polling test) should run. Off by default so the ordinary suite stays fast; enable
+    /// with <c>SNOWFLAKE_RUN_SLOW_TESTS=1</c> (or <c>true</c>).
+    /// </summary>
+    internal static bool RunSlowTests
+    {
+        get
+        {
+            string? value = Environment.GetEnvironmentVariable(RunSlowTestsVariable);
+            return string.Equals(value, "1", StringComparison.Ordinal)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        }
+    }
 
     static IntegrationTestingUtils()
     {
@@ -81,7 +98,7 @@ internal static class IntegrationTestingUtils
         else if (testConfiguration.Authentication.SnowflakeJwt is not null)
         {
             parameters["username"] = Parameter(testConfiguration.Authentication.SnowflakeJwt.User, "user");
-            parameters["adbc.snowflake.sql.auth_type"] = "jwt";
+            parameters["adbc.snowflake.sql.auth_type"] = "auth_jwt";
 
             if (!string.IsNullOrWhiteSpace(testConfiguration.Authentication.SnowflakeJwt.PrivateKeyFile))
             {
@@ -97,16 +114,22 @@ internal static class IntegrationTestingUtils
                 parameters["adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password"] = testConfiguration.Authentication.SnowflakeJwt.PrivateKeyPassPhrase;
             }
         }
+        else if (testConfiguration.Authentication.Pat is not null)
+        {
+            parameters["username"] = Parameter(testConfiguration.Authentication.Pat.User, "user");
+            parameters["adbc.snowflake.sql.auth_type"] = "auth_pat";
+            parameters["adbc.snowflake.sql.client_option.auth_token"] = Parameter(testConfiguration.Authentication.Pat.Token, "pat_token");
+        }
         else if (testConfiguration.Authentication.OAuth is not null)
         {
             parameters["username"] = Parameter(testConfiguration.Authentication.OAuth.User, "user");
-            parameters["adbc.snowflake.sql.auth_type"] = "oauth";
+            parameters["adbc.snowflake.sql.auth_type"] = "auth_oauth";
             parameters["adbc.snowflake.sql.client_option.auth_token"] = Parameter(testConfiguration.Authentication.OAuth.Token, "oauth_token");
         }
         else if (testConfiguration.Authentication.ExternalBrowser is not null)
         {
             parameters["username"] = Parameter(testConfiguration.Authentication.ExternalBrowser.User, "user");
-            parameters["adbc.snowflake.sql.auth_type"] = "externalbrowser";
+            parameters["adbc.snowflake.sql.auth_type"] = "auth_ext_browser";
         }
         else
         {

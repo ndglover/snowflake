@@ -114,6 +114,10 @@ disabled because it does not populate the `metadata.*` block the metadata tests 
     "auth_jwt": {
       "user": "your-service-user",
       "private_key_file": "C:\\path\\to\\rsa_key.p8"
+    },
+    "auth_pat": {
+      "user": "your-service-user",
+      "token": "your-programmatic-access-token"
     }
   },
   "metadata": {
@@ -133,9 +137,21 @@ The native tests need only valid **credentials + a warehouse**, plus a **writabl
 the native tests — they remain only for Interop-config compatibility.
 
 When multiple `authentication` blocks are present, the main suite uses `auth_snowflake`
-first; the `auth_jwt` block is exercised only by the key-pair test
-(`ConnectionTests.OpenAndConnect_WithKeyPair_Succeeds`), which skips when the block is
-absent. Key-pair setup — generate a PKCS#8 key pair, then register the public key on a
+first; the `auth_jwt` and `auth_pat` blocks are exercised only by their dedicated
+connection tests (`ConnectionTests.OpenAndConnect_WithKeyPair_Succeeds` /
+`OpenAndConnect_WithPat_Succeeds`), which skip when the block is absent.
+
+PAT setup — the details matter (the server reports every misconfiguration as the same
+"Programmatic access token is invalid" error):
+- The `auth_pat` block's `user` must be the user the token was **created for** (PATs are
+  user-bound).
+- The user must be subject to a **network policy** (`CREATE NETWORK POLICY …` +
+  `ALTER USER … SET NETWORK_POLICY = …`). Snowsight's "bypass requirement for network
+  policy" option exists for **human users only** and is temporary.
+- For `TYPE = SERVICE` users, `ROLE_RESTRICTION` is **mandatory**:
+  `ALTER USER <service-user> ADD PROGRAMMATIC ACCESS TOKEN <name>
+  ROLE_RESTRICTION = '<role>' DAYS_TO_EXPIRY = 30;` — the printed `token_secret`
+  (shown once) is what goes in the config, not the token's name. Key-pair setup — generate a PKCS#8 key pair, then register the public key on a
 dedicated service user (its `DEFAULT_ROLE` only needs warehouse usage; the top-level
 `role` in the config is not applied to this test):
 
@@ -186,6 +202,11 @@ dotnet test --filter "Category=Integration & FullyQualifiedName~QueryAndMetadata
 
 # Everything — integration tests skip automatically if SNOWFLAKE_TEST_CONFIG_FILE is unset
 dotnet test
+
+# Deliberately slow tests (Category=Slow, e.g. the ~50s long-running-query polling test)
+# skip by default; enable them explicitly:
+$env:SNOWFLAKE_RUN_SLOW_TESTS = "1"   # PowerShell (bash: export SNOWFLAKE_RUN_SLOW_TESTS=1)
+dotnet test --filter "Category=Slow"
 ```
 
 ---

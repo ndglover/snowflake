@@ -69,11 +69,14 @@ public class ConnectionStringParserTests
         Assert.Equal("testpass", config.Authentication.Password);
     }
 
-    [Fact]
-    public void Parse_WithKeyPairAuthentication_ShouldReturnValidConfig()
+    [Theory]
+    [InlineData("auth_jwt")]           // canonical (ADBC Snowflake driver reference)
+    [InlineData("snowflake_jwt")]      // connector-net alias
+    [InlineData("jwt")]                // shorthand alias
+    public void Parse_WithKeyPairAuthentication_ShouldReturnValidConfig(string authType)
     {
         // Arrange
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type=jwt;adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value=PRIVATE_KEY_CONTENT");
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type={authType};adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value=PRIVATE_KEY_CONTENT");
 
         // Act
         var config = ConnectionStringParser.ParseParameters(parameters);
@@ -86,11 +89,26 @@ public class ConnectionStringParserTests
         Assert.Equal("PRIVATE_KEY_CONTENT", config.Authentication.PrivateKey);
     }
 
-    [Fact]
-    public void Parse_WithOAuthAuthentication_ShouldReturnValidConfig()
+    [Theory]
+    [InlineData("auth_snowflake")]
+    [InlineData("snowflake")]
+    public void Parse_WithExplicitPasswordAuthType_ShouldReturnValidConfig(string authType)
+    {
+        var parameters = ParseConnectionString(
+            $"adbc.snowflake.sql.account=testaccount;username=testuser;password=testpass;adbc.snowflake.sql.auth_type={authType}");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(AuthenticationType.UsernamePassword, config.Authentication.Type);
+    }
+
+    [Theory]
+    [InlineData("auth_oauth")]
+    [InlineData("oauth")]
+    public void Parse_WithOAuthAuthentication_ShouldReturnValidConfig(string authType)
     {
         // Arrange
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type=oauth;adbc.snowflake.sql.client_option.auth_token=test_token");
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type={authType};adbc.snowflake.sql.client_option.auth_token=test_token");
 
         // Act
         var config = ConnectionStringParser.ParseParameters(parameters);
@@ -100,7 +118,41 @@ public class ConnectionStringParserTests
         Assert.Equal("testaccount", config.Account);
         Assert.Equal("testuser", config.User);
         Assert.Equal(AuthenticationType.OAuth, config.Authentication.Type);
-        Assert.Equal("test_token", config.Authentication.OAuthToken);
+        Assert.Equal("test_token", config.Authentication.Token);
+    }
+
+    [Theory]
+    [InlineData("auth_pat")]
+    [InlineData("programmatic_access_token")]
+    [InlineData("pat")]
+    public void Parse_WithPatAuthentication_ShouldReturnValidConfig(string authType)
+    {
+        // Arrange - a PAT rides the same auth_token option as OAuth; auth_type selects how
+        // it is presented to Snowflake.
+        var parameters = ParseConnectionString(
+            $"adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type={authType};adbc.snowflake.sql.client_option.auth_token=test_pat");
+
+        // Act
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        // Assert
+        Assert.Equal(AuthenticationType.Pat, config.Authentication.Type);
+        Assert.Equal("test_pat", config.Authentication.Token);
+    }
+
+    [Theory]
+    [InlineData("auth_okta")]
+    [InlineData("auth_mfa")]
+    [InlineData("auth_wif")]
+    public void Parse_WithRecognizedButUnsupportedAuthType_SaysSoExplicitly(string authType)
+    {
+        // Canonical ADBC values the driver doesn't implement yet must be distinguishable
+        // from a typo.
+        var parameters = ParseConnectionString(
+            $"adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type={authType}");
+
+        var ex = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("not supported by this driver yet", ex.Message);
     }
 
     [Fact]
@@ -217,7 +269,7 @@ public class ConnectionStringParserTests
     public void Parse_WithSsoProperties_ShouldReturnValidConfig()
     {
         // Arrange - SSO not currently supported in ADBC standard, removing this test
-        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type=externalbrowser");
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=testaccount;username=testuser;adbc.snowflake.sql.auth_type=auth_ext_browser");
 
         // Act
         var config = ConnectionStringParser.ParseParameters(parameters);

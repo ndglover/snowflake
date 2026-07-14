@@ -371,11 +371,15 @@ public class StatementTests
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task LongRunningQuery_OutlivesSyncWindow_ReturnsResultViaPolling()
     {
         // A query that exceeds Snowflake's synchronous response window (~45s) returns a
         // query-in-progress response with a getResultUrl; the driver must poll it to the
-        // final result instead of failing. SYSTEM$WAIT(50) makes that deterministic.
+        // final result instead of failing. SYSTEM$WAIT(50) makes that deterministic — and
+        // makes the test itself take ~50s, so it only runs when explicitly enabled.
+        Skip.IfNot(IntegrationTestingUtils.RunSlowTests,
+            $"Slow test (~50s wall clock); set {IntegrationTestingUtils.RunSlowTestsVariable}=1 to run.");
         var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(_testConfiguration, out var parameters);
         using var database = driver.Open(parameters);
         using var connection = database.Connect(new Dictionary<string, string>());

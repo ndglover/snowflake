@@ -21,6 +21,12 @@ internal enum AuthenticationType
     OAuth,
 
     /// <summary>
+    /// Programmatic access token (PAT) authentication — Snowflake's replacement for
+    /// password-style programmatic access. The user must be subject to a network policy.
+    /// </summary>
+    Pat,
+
+    /// <summary>
     /// Single Sign-On authentication.
     /// </summary>
     Sso,

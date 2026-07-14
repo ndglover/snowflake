@@ -432,7 +432,7 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private static string? CredentialSecret(AuthenticationConfig auth) => auth.Type switch
     {
         AuthenticationType.UsernamePassword => auth.Password,
-        AuthenticationType.OAuth => auth.OAuthToken,
+        AuthenticationType.OAuth or AuthenticationType.Pat => auth.Token,
         AuthenticationType.KeyPair => $"{auth.PrivateKey ?? auth.PrivateKeyPath} {auth.PrivateKeyPassphrase}",
         _ => null,
     };

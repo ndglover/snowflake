@@ -240,13 +240,31 @@ public class KeyPairAuthenticatorTests
         var config = new ConnectionConfig
         {
             Account = Account,
-            Authentication = new AuthenticationConfig { OAuthToken = "token" },
+            Authentication = new AuthenticationConfig { Token = "token" },
         };
         OAuthAuthenticator.ValidateRequirements(config);
 
         var ex = Assert.Throws<ArgumentException>(() => OAuthAuthenticator.ValidateRequirements(
             new ConnectionConfig { Account = Account }));
         Assert.Contains("OAuth token", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateRequirements_Pat_RequiresUserAndToken()
+    {
+        // A PAT is bound to a user (unlike OAuth), so both must be present — and every
+        // missing item is reported at once.
+        var ex = Assert.Throws<ArgumentException>(() => PatAuthenticator.ValidateRequirements(
+            new ConnectionConfig { Account = Account }));
+        Assert.Contains("user", ex.Message);
+        Assert.Contains("programmatic access token", ex.Message);
+
+        PatAuthenticator.ValidateRequirements(new ConnectionConfig
+        {
+            Account = Account,
+            User = User,
+            Authentication = new AuthenticationConfig { Token = "pat-token" },
+        });
     }
 
     // ---- AuthenticationService: pure dispatch on the configured auth type ----
@@ -259,6 +277,7 @@ public class KeyPairAuthenticatorTests
             Substitute.For<IBasicAuthenticator>(),
             keyPairAuth,
             Substitute.For<IOAuthAuthenticator>(),
+            Substitute.For<IPatAuthenticator>(),
             Substitute.For<ISsoAuthenticator>());
         var config = KeyPairConfig(new AuthenticationConfig { Type = AuthenticationType.KeyPair, PrivateKey = "pem" });
 

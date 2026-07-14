@@ -523,10 +523,10 @@ public class ConnectionPoolManagerTests
         // different tokens share one pooled session. The credential fingerprint must separate them.
         var a = BasicConfig();
         a.User = string.Empty;
-        a.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, OAuthToken = "token-A" };
+        a.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, Token = "token-A" };
         var b = BasicConfig();
         b.User = string.Empty;
-        b.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, OAuthToken = "token-B" };
+        b.Authentication = new AuthenticationConfig { Type = AuthenticationType.OAuth, Token = "token-B" };
 
         Assert.NotEqual(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
     }

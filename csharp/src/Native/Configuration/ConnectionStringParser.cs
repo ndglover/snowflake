@@ -155,12 +155,17 @@ internal static class ConnectionStringParser
 
         if (authTypeStr != null)
         {
+            // Canonical values follow the ADBC Snowflake driver reference (auth_snowflake,
+            // auth_jwt, ...); the connector-net-style spellings are kept as aliases.
             authConfig.Type = authTypeStr.ToLowerInvariant() switch
             {
-                "snowflake" => AuthenticationType.UsernamePassword,
-                "snowflake_jwt" or "jwt" => AuthenticationType.KeyPair,
-                "oauth" => AuthenticationType.OAuth,
-                "externalbrowser" => AuthenticationType.ExternalBrowser,
+                "auth_snowflake" or "snowflake" => AuthenticationType.UsernamePassword,
+                "auth_jwt" or "snowflake_jwt" or "jwt" => AuthenticationType.KeyPair,
+                "auth_oauth" or "oauth" => AuthenticationType.OAuth,
+                "auth_pat" or "programmatic_access_token" or "pat" => AuthenticationType.Pat,
+                "auth_ext_browser" or "externalbrowser" => AuthenticationType.ExternalBrowser,
+                "auth_okta" or "auth_mfa" or "auth_wif" => throw new ArgumentException(
+                    $"auth_type '{authTypeStr}' is a recognized ADBC Snowflake auth method but is not supported by this driver yet."),
                 _ => throw new ArgumentException($"Unsupported auth_type: {authTypeStr}")
             };
         }
@@ -177,8 +182,8 @@ internal static class ConnectionStringParser
         // Private key passphrase - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password
         authConfig.PrivateKeyPassphrase = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password");
 
-        // OAuth token - ADBC standard: adbc.snowflake.sql.client_option.auth_token
-        authConfig.OAuthToken = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.auth_token");
+        // Access token (OAuth or PAT, per auth_type) - ADBC standard: adbc.snowflake.sql.client_option.auth_token
+        authConfig.Token = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.auth_token");
 
         return authConfig;
     }

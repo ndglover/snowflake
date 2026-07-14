@@ -102,6 +102,7 @@ public class SnowflakeAuthentication
 {
     const string AuthOAuth = "auth_oauth";
     const string AuthJwt = "auth_jwt";
+    const string AuthPat = "auth_pat";
     const string AuthSnowflake = "auth_snowflake";
     const string AuthExternalBrowser = "auth_externalbrowser";
 
@@ -111,11 +112,23 @@ public class SnowflakeAuthentication
     [JsonPropertyName(AuthJwt)]
     public JwtAuthentication? SnowflakeJwt { get; set; }
 
+    [JsonPropertyName(AuthPat)]
+    public PatAuthentication? Pat { get; set; }
+
     [JsonPropertyName(AuthSnowflake)]
     public DefaultAuthentication? Default { get; set; }
 
     [JsonPropertyName(AuthExternalBrowser)]
     public ExternalBrowserAuthentication? ExternalBrowser { get; set; }
+}
+
+public class PatAuthentication
+{
+    [JsonPropertyName("user")]
+    public string User { get; set; } = string.Empty;
+
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
 }
 
 public class OAuthAuthentication

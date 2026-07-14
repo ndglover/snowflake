@@ -116,4 +116,36 @@ public class ConnectionTests
         Assert.NotNull(result.Stream);
         result.Stream.Dispose();
     }
+
+    [SkippableFact]
+    public void OpenAndConnect_WithPat_Succeeds()
+    {
+        // Requires an auth_pat block in the test configuration: a programmatic access token
+        // for a user that is subject to a network policy (Snowflake rejects PAT logins
+        // otherwise).
+        PatAuthentication? pat = _testConfiguration.Authentication.Pat;
+        Skip.If(pat is null, "No auth_pat block in the test configuration");
+
+        // Given a configuration carrying ONLY the PAT credentials — no role/database/schema,
+        // so the service user's own defaults apply (as with the key-pair test).
+        var patOnly = new IntegrationTestConfiguration
+        {
+            Account = _testConfiguration.Account,
+            Warehouse = _testConfiguration.Warehouse,
+            TlsSkipVerify = _testConfiguration.TlsSkipVerify,
+            Authentication = new SnowflakeAuthentication { Pat = pat },
+        };
+
+        // When a connection is opened and a query is run over the PAT-authenticated session
+        var driver = IntegrationTestingUtils.GetSnowflakeAdbcDriver(patOnly, out var parameters);
+        using var database = driver.Open(parameters);
+        using var connection = database.Connect(new Dictionary<string, string>());
+        using var statement = connection.CreateStatement();
+        statement.SqlQuery = "SELECT 1";
+        var result = statement.ExecuteQuery();
+
+        // Then the login and the query both succeed
+        Assert.NotNull(result.Stream);
+        result.Stream.Dispose();
+    }
 }

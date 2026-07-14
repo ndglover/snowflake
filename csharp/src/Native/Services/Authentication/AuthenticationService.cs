@@ -36,6 +36,7 @@ internal class AuthenticationService : IAuthenticationService
     private readonly IBasicAuthenticator _basicAuth;
     private readonly IKeyPairAuthenticator _keyPairAuth;
     private readonly IOAuthAuthenticator _oauthAuth;
+    private readonly IPatAuthenticator _patAuth;
     private readonly ISsoAuthenticator _ssoAuth;
 
     /// <summary>
@@ -44,16 +45,19 @@ internal class AuthenticationService : IAuthenticationService
     /// <param name="basicAuth">The basic authenticator.</param>
     /// <param name="keyPairAuth">The key pair authenticator.</param>
     /// <param name="oauthAuth">The OAuth authenticator.</param>
+    /// <param name="patAuth">The programmatic-access-token authenticator.</param>
     /// <param name="ssoAuth">The SSO authenticator.</param>
     public AuthenticationService(
         IBasicAuthenticator basicAuth,
         IKeyPairAuthenticator keyPairAuth,
         IOAuthAuthenticator oauthAuth,
+        IPatAuthenticator patAuth,
         ISsoAuthenticator ssoAuth)
     {
         _basicAuth = basicAuth ?? throw new ArgumentNullException(nameof(basicAuth));
         _keyPairAuth = keyPairAuth ?? throw new ArgumentNullException(nameof(keyPairAuth));
         _oauthAuth = oauthAuth ?? throw new ArgumentNullException(nameof(oauthAuth));
+        _patAuth = patAuth ?? throw new ArgumentNullException(nameof(patAuth));
         _ssoAuth = ssoAuth ?? throw new ArgumentNullException(nameof(ssoAuth));
     }
 
@@ -63,14 +67,13 @@ internal class AuthenticationService : IAuthenticationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
-
-        // Pure dispatch: each authenticator owns its requirements — it validates them itself,
-        // reporting everything missing in one error — so nothing type-specific lives here.
+        
         return config.Authentication.Type switch
         {
             AuthenticationType.UsernamePassword => await _basicAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
             AuthenticationType.KeyPair => await _keyPairAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
             AuthenticationType.OAuth => await _oauthAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
+            AuthenticationType.Pat => await _patAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
             AuthenticationType.Sso or AuthenticationType.ExternalBrowser => await _ssoAuth.AuthenticateAsync(config, cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException($"Authentication type {config.Authentication.Type} is not supported.")
         };

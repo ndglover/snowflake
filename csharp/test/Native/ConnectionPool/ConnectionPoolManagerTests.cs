@@ -525,6 +525,29 @@ public class ConnectionPoolManagerTests
     }
 
     [Fact]
+    public void GeneratePoolKey_KeyPairFieldsShiftedAcrossTheBoundary_ProducesDifferentKeys()
+    {
+        // The credential fingerprint hashes key material and passphrase together, so without a
+        // delimiter these two would collide and share a pooled session.
+        var a = BasicConfig();
+        a.Authentication = new AuthenticationConfig
+        {
+            Type = AuthenticationType.KeyPair,
+            PrivateKey = "AB",
+            PrivateKeyPassphrase = "C"
+        };
+        var b = BasicConfig();
+        b.Authentication = new AuthenticationConfig
+        {
+            Type = AuthenticationType.KeyPair,
+            PrivateKey = "A",
+            PrivateKeyPassphrase = "BC"
+        };
+
+        Assert.NotEqual(ConnectionPoolManager.GeneratePoolKey(a), ConnectionPoolManager.GeneratePoolKey(b));
+    }
+
+    [Fact]
     public void GeneratePoolKey_DifferentHost_ProducesDifferentKeys()
     {
         var a = BasicConfig();

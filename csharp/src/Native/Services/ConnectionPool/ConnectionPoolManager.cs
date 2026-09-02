@@ -48,6 +48,14 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     private bool _disposed;
 
     /// <summary>
+    /// Separates the fields of a composite credential before it is hashed, so that different
+    /// field boundaries cannot produce the same fingerprint (key "AB" + passphrase "C" must not
+    /// collide with key "A" + passphrase "BC"). NUL is used because it cannot occur in a PEM or
+    /// a passphrase, unlike any printable character.
+    /// </summary>
+    private const char CredentialFieldDelimiter = '\0';
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="ConnectionPoolManager"/> class.
     /// </summary>
     /// <param name="authService">The authentication service.</param>
@@ -436,7 +444,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager
     {
         AuthenticationType.UsernamePassword => auth.Password,
         AuthenticationType.OAuth or AuthenticationType.Pat => auth.Token,
-        AuthenticationType.KeyPair => $"{auth.PrivateKey ?? auth.PrivateKeyPath} {auth.PrivateKeyPassphrase}",
+        AuthenticationType.KeyPair =>
+            $"{auth.PrivateKey ?? auth.PrivateKeyPath}{CredentialFieldDelimiter}{auth.PrivateKeyPassphrase}",
         _ => null,
     };
 

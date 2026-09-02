@@ -21,8 +21,18 @@ namespace AdbcDrivers.Snowflake.Native.Configuration;
 /// </summary>
 internal class NetworkConfig
 {
-    /// <summary>Explicit host override. When set, used directly instead of deriving from account.</summary>
+    /// <summary>
+    /// Explicit host override. When set, it is used as the host verbatim instead of deriving one
+    /// from the account, and <see cref="Region"/> is ignored; <see cref="Protocol"/> and
+    /// <see cref="Port"/> still apply.
+    /// </summary>
     public string? Host { get; set; }
+
+    /// <summary>
+    /// Region and cloud the account lives in, when it is not already carried as a suffix on the
+    /// account identifier. Used to derive the host, so it is ignored when <see cref="Host"/> is set.
+    /// </summary>
+    public string? Region { get; set; }
 
     /// <summary>Port override. Default is 443.</summary>
     public int Port { get; set; } = 443;

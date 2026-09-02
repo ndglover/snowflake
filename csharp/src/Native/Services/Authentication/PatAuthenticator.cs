@@ -56,7 +56,7 @@ internal class PatAuthenticator : IPatAuthenticator
             TOKEN = config.Authentication.Token
         };
 
-        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config, authData, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Reports everything missing for PAT auth in a single error.</summary>

@@ -31,6 +31,20 @@ internal class ConnectionConfig
     public string Account { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets the bare account locator, with any region/cloud suffix stripped. Snowflake's login
+    /// payload and JWT claims expect this form, whereas <see cref="Account"/> keeps the suffix
+    /// because the account URL is derived from it.
+    /// </summary>
+    public string AccountName
+    {
+        get
+        {
+            int regionSeparator = Account.IndexOf('.');
+            return regionSeparator > 0 ? Account[..regionSeparator] : Account;
+        }
+    }
+
+    /// <summary>
     /// Gets or sets the username for authentication.
     /// Optional when using OAuth (user is derived from the token).
     /// </summary>

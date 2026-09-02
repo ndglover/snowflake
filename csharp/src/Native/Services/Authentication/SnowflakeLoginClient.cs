@@ -50,17 +50,17 @@ internal class SnowflakeLoginClient
     /// <summary>
     /// Performs a login request to Snowflake.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="authData">Auth-specific fields set by the caller.</param>
-    /// <param name="config">Optional connection configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An authentication token.</returns>
     public async Task<AuthenticationToken> LoginAsync(
-        string account,
+        ConnectionConfig config,
         LoginRequestData authData,
-        ConnectionConfig? config = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(config);
+
         // Fill in common fields. CLIENT_APP_ID/CLIENT_APP_VERSION are NOT free-form identity:
         // Snowflake gates server-side capabilities on them — a ".NET" client below the version
         // that introduced Arrow support gets JSON results regardless of the requested
@@ -68,14 +68,14 @@ internal class SnowflakeLoginClient
         // not this driver's own assembly version.
         authData.CLIENT_APP_ID = ".NET";
         authData.CLIENT_APP_VERSION = "3.1.0";
-        authData.ACCOUNT_NAME = account;
+        authData.ACCOUNT_NAME = config.AccountName;
         authData.CLIENT_ENVIRONMENT = ClientEnvironment.Create();
         authData.SESSION_PARAMETERS = new Dictionary<string, object>
         {
             { "DOTNET_QUERY_RESULT_FORMAT", "ARROW" }
         };
 
-        var loginUrl = BuildUrl(account, LoginEndpoint, config);
+        var loginUrl = BuildUrl(config, LoginEndpoint);
         var loginRequest = new LoginRequestBody { Data = authData };
 
         try
@@ -137,20 +137,25 @@ internal class SnowflakeLoginClient
     }
 
     /// <summary>
-    /// Builds a Snowflake URL for the given account and endpoint.
+    /// Builds a Snowflake URL for the configured account and the given endpoint.
     /// </summary>
-    /// <param name="account">The Snowflake account identifier.</param>
+    /// <param name="config">The connection configuration.</param>
     /// <param name="endpoint">The API endpoint path.</param>
-    /// <param name="config">Optional connection configuration for query parameters.</param>
+    /// <param name="includeSessionParameters">
+    /// Whether to attach the warehouse/database/schema/role query parameters. Endpoint discovery
+    /// runs before there is a session to configure, so it opts out.
+    /// </param>
     /// <returns>The fully-qualified URL.</returns>
-    internal string BuildUrl(string account, string endpoint, ConnectionConfig? config = null)
+    internal string BuildUrl(ConnectionConfig config, string endpoint, bool includeSessionParameters = true)
     {
-        var accountUrl = SnowflakeAccountUrl.Build(account, config?.Network);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var accountUrl = SnowflakeAccountUrl.Build(config.Account, config.Network);
 
         var uriBuilder = new UriBuilder($"{accountUrl}{endpoint}");
         var query = HttpUtility.ParseQueryString(string.Empty);
 
-        if (config != null)
+        if (includeSessionParameters)
         {
             if (!string.IsNullOrEmpty(config.Warehouse))
                 query["warehouse"] = config.Warehouse;

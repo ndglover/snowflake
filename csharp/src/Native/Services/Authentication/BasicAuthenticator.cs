@@ -53,7 +53,7 @@ internal class BasicAuthenticator : IBasicAuthenticator
             PASSWORD = config.Authentication.Password
         };
 
-        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config, authData, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Reports everything missing for username/password auth in a single error.</summary>

@@ -494,4 +494,163 @@ public class ConnectionStringParserTests
         Assert.Equal("OVERRIDE_WH", config.Warehouse); // Should use connection override despite case difference
         Assert.Equal("testpass", config.Authentication.Password);
     }
+
+    [Theory]
+    [InlineData("xy12345")]
+    [InlineData("xy12345.us-east-1")]
+    [InlineData("xy12345.us-east-1.aws")]
+    [InlineData("myorg-my_account")]
+    public void Parse_WithValidAccountIdentifier_ShouldSucceed(string account)
+    {
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account={account};username=testuser;password=testpass");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(account, config.Account);
+    }
+
+    [Theory]
+    [InlineData("https://xy12345.snowflakecomputing.com")]
+    [InlineData("xy12345.snowflakecomputing.com")]
+    [InlineData("xy12345.us-east-1.privatelink.snowflakecomputing.com")]
+    [InlineData("xy12345.snowflakecomputing.cn")]
+    public void Parse_WithHostNameAsAccount_ShouldThrowPointingAtHostParameter(string account)
+    {
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account={account};username=testuser;password=testpass");
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("adbc.snowflake.sql.uri.host", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("http://xy12345")]
+    [InlineData("xy12345/session")]
+    [InlineData("xy12345:443")]
+    [InlineData("\"xy12345\"")]
+    [InlineData("-xy12345")]
+    [InlineData("xy12345.")]
+    public void Parse_WithMalformedAccount_ShouldThrow(string account)
+    {
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "adbc.snowflake.sql.account", account },
+            { "username", "testuser" },
+            { "password", "testpass" }
+        };
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("valid account identifier", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("localhost")]
+    [InlineData("xy12345.privatelink.snowflakecomputing.com")]
+    [InlineData("10.0.0.1")]
+    public void Parse_WithValidHost_ShouldPopulateNetworkHost(string host)
+    {
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account=xy12345;username=testuser;password=testpass;adbc.snowflake.sql.uri.host={host}");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal(host, config.Network.Host);
+    }
+
+    [Theory]
+    [InlineData("https://xy12345.snowflakecomputing.com")]
+    [InlineData("xy12345.snowflakecomputing.com/session")]
+    [InlineData("xy12345.snowflakecomputing.com:443")]
+    [InlineData("my host")]
+    public void Parse_WithMalformedHost_ShouldThrow(string host)
+    {
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "adbc.snowflake.sql.account", "xy12345" },
+            { "username", "testuser" },
+            { "password", "testpass" },
+            { "adbc.snowflake.sql.uri.host", host }
+        };
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("valid host name", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-443")]
+    [InlineData("70000")]
+    public void Parse_WithPortOutOfRange_ShouldThrow(string port)
+    {
+        var parameters = ParseConnectionString($"adbc.snowflake.sql.account=xy12345;username=testuser;password=testpass;adbc.snowflake.sql.uri.port={port}");
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("valid port", exception.Message);
+    }
+
+    [Fact]
+    public void Parse_WithProtocol_ShouldNormaliseToLowerCase()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=xy12345;username=testuser;password=testpass;adbc.snowflake.sql.uri.protocol=HTTP");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal("http", config.Network.Protocol);
+    }
+
+    [Fact]
+    public void Parse_WithUnsupportedProtocol_ShouldThrow()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=xy12345;username=testuser;password=testpass;adbc.snowflake.sql.uri.protocol=ftp");
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("valid protocol", exception.Message);
+    }
+
+    [Fact]
+    public void Parse_WithRegion_ShouldPopulateNetworkRegion()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=xy12345;username=testuser;password=testpass;adbc.snowflake.sql.region=us-east-1.aws");
+
+        var config = ConnectionStringParser.ParseParameters(parameters);
+
+        Assert.Equal("us-east-1.aws", config.Network.Region);
+    }
+
+    [Fact]
+    public void Parse_WithRegionAndRegionSuffixedAccount_ShouldThrow()
+    {
+        var parameters = ParseConnectionString("adbc.snowflake.sql.account=xy12345.eu-west-1;username=testuser;password=testpass;adbc.snowflake.sql.region=us-east-1");
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("conflicts", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("https://us-east-1")]
+    [InlineData("us east 1")]
+    [InlineData("us-east-1/")]
+    public void Parse_WithMalformedRegion_ShouldThrow(string region)
+    {
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "adbc.snowflake.sql.account", "xy12345" },
+            { "username", "testuser" },
+            { "password", "testpass" },
+            { "adbc.snowflake.sql.region", region }
+        };
+
+        var exception = Assert.Throws<ArgumentException>(() => ConnectionStringParser.ParseParameters(parameters));
+        Assert.Contains("valid region", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("xy12345", "xy12345")]
+    [InlineData("xy12345.us-east-1", "xy12345")]
+    [InlineData("xy12345.us-east-1.aws", "xy12345")]
+    [InlineData("myorg-my_account", "myorg-my_account")]
+    public void AccountName_StripsRegionAndCloudSuffix(string account, string expected)
+    {
+        var config = new ConnectionConfig { Account = account };
+
+        Assert.Equal(expected, config.AccountName);
+    }
 }

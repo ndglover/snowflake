@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using Apache.Arrow.Adbc;
 
@@ -33,6 +34,20 @@ internal static class ConnectionStringParser
 
     /// <summary>Upper bound for the keep-alive heartbeat frequency.</summary>
     private static readonly TimeSpan MaxHeartbeatFrequency = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Account identifiers and regions are word characters, dots and dashes, starting and ending
+    /// on a word character. This rejects URLs, whitespace and quoting artefacts that would otherwise be concatenated
+    /// into a nonsense host.
+    /// </summary>
+    private static readonly Regex IdentifierPattern = new(@"^\w([\w.-]*\w)?$", RegexOptions.Compiled);
+
+    /// <summary>Domain marker identifying a host name passed where an account was expected.</summary>
+    private const string SnowflakeDomain = "snowflakecomputing.";
+
+    /// <summary>Bounds for a TCP port, which the endpoint override is not otherwise constrained to.</summary>
+    private const int MinPort = 1;
+    private const int MaxPort = 65535;
 
     /// <summary>
     /// Parses ADBC parameters with connection-specific overrides into a ConnectionConfig object.
@@ -81,7 +96,7 @@ internal static class ConnectionStringParser
     {
         var config = new ConnectionConfig
         {
-            Account = GetRequiredParameter(parameters, "adbc.snowflake.sql.account"),
+            Account = ParseAccount(parameters),
             User = GetOptionalParameter(parameters, "username") ?? string.Empty,
             Database = GetOptionalParameter(parameters, AdbcOptions.Connection.CurrentCatalog)
                        ?? GetOptionalParameter(parameters, "adbc.snowflake.sql.db"),
@@ -119,9 +134,39 @@ internal static class ConnectionStringParser
         config.PoolConfig = ParseConnectionPoolConfig(parameters);
         config.Network = ParseNetworkConfig(parameters);
 
+        // gosnowflake treats an account that already carries its region plus an explicit region
+        // parameter as a conflict rather than silently preferring one of them.
+        if (!string.IsNullOrEmpty(config.Network.Region) && config.Account.Contains('.'))
+        {
+            throw new ArgumentException(
+                "Parameter 'adbc.snowflake.sql.region' conflicts with the region already carried by " +
+                $"'adbc.snowflake.sql.account' ('{config.Account}'). Specify the region in one place only.");
+        }
+
         ValidateConfiguration(config);
 
         return config;
+    }
+
+    private static string ParseAccount(IReadOnlyDictionary<string, string> parameters)
+    {
+        var account = GetRequiredParameter(parameters, "adbc.snowflake.sql.account");
+
+        if (account.Contains(SnowflakeDomain, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Parameter 'adbc.snowflake.sql.account' is a host name ('{account}'), not an account identifier. " +
+                "Use 'adbc.snowflake.sql.uri.host' to send requests to a specific endpoint.");
+        }
+
+        if (!IdentifierPattern.IsMatch(account))
+        {
+            throw new ArgumentException(
+                $"Parameter 'adbc.snowflake.sql.account' is not a valid account identifier ('{account}'). " +
+                "Expected a form such as 'xy12345', 'xy12345.us-east-1' or 'myorg-my_account'.");
+        }
+
+        return account;
     }
 
     private static AuthenticationConfig ParseAuthenticationConfig(IReadOnlyDictionary<string, string> parameters)
@@ -226,11 +271,50 @@ internal static class ConnectionStringParser
 
         network.Host = GetOptionalParameter(parameters, "adbc.snowflake.sql.uri.host");
 
+        if (!string.IsNullOrEmpty(network.Host) && Uri.CheckHostName(network.Host) == UriHostNameType.Unknown)
+        {
+            throw new ArgumentException(
+                $"Parameter 'adbc.snowflake.sql.uri.host' is not a valid host name ('{network.Host}'). " +
+                "Expected a bare host such as 'xy12345.privatelink.snowflakecomputing.com' or 'localhost', " +
+                "with the scheme and port given by 'adbc.snowflake.sql.uri.protocol' and '.port'.");
+        }
+
+        if (GetOptionalParameter(parameters, "adbc.snowflake.sql.region") is { } region)
+        {
+            if (!IdentifierPattern.IsMatch(region))
+            {
+                throw new ArgumentException(
+                    $"Parameter 'adbc.snowflake.sql.region' is not a valid region ('{region}'). " +
+                    "Expected a form such as 'us-east-1' or 'us-east-1.aws'.");
+            }
+
+            network.Region = region;
+        }
+
         if (GetOptionalInt(parameters, "adbc.snowflake.sql.uri.port") is { } port)
+        {
+            if (port < MinPort || port > MaxPort)
+            {
+                throw new ArgumentException(
+                    $"Parameter 'adbc.snowflake.sql.uri.port' is not a valid port ('{port}'). " +
+                    $"Expected {MinPort}-{MaxPort}.");
+            }
+
             network.Port = port;
+        }
 
         if (GetOptionalParameter(parameters, "adbc.snowflake.sql.uri.protocol") is { } protocol)
-            network.Protocol = protocol;
+        {
+            if (!protocol.Equals("https", StringComparison.OrdinalIgnoreCase) &&
+                !protocol.Equals("http", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Parameter 'adbc.snowflake.sql.uri.protocol' is not a valid protocol ('{protocol}'). " +
+                    "Expected 'https' or 'http'.");
+            }
+
+            network.Protocol = protocol.ToLowerInvariant();
+        }
 
         if (GetOptionalBool(parameters, "adbc.snowflake.sql.client_option.no_proxy") is { } noProxy)
             network.NoProxy = noProxy;

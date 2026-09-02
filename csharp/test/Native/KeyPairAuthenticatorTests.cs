@@ -108,7 +108,8 @@ public class KeyPairAuthenticatorTests
         (RSA rsa, string pem) = CreateKey();
         using (rsa)
         {
-            string jwt = KeyPairAuthenticator.GenerateJwtToken("xy12345.eu-west-1", User, pem, passphrase: null);
+            var config = new ConnectionConfig { Account = "xy12345.eu-west-1", User = User };
+            string jwt = KeyPairAuthenticator.GenerateJwtToken(config.AccountName, User, pem, passphrase: null);
 
             using JsonDocument payload = DecodeSegment(jwt, 1);
             Assert.Equal("XY12345.TESTUSER", payload.RootElement.GetProperty("sub").GetString());

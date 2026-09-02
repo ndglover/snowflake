@@ -53,7 +53,7 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
         ValidateRequirements(config);
 
         string privateKeyPem = await ResolvePrivateKeyPemAsync(config.Authentication, cancellationToken).ConfigureAwait(false);
-        var jwtToken = GenerateJwtToken(config.Account, config.User, privateKeyPem, config.Authentication.PrivateKeyPassphrase);
+        var jwtToken = GenerateJwtToken(config.AccountName, config.User, privateKeyPem, config.Authentication.PrivateKeyPassphrase);
 
         var authData = new LoginRequestData
         {
@@ -62,7 +62,7 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             TOKEN = jwtToken
         };
 
-        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config, authData, cancellationToken).ConfigureAwait(false);
     }
 
     internal static void ValidateRequirements(ConnectionConfig config)
@@ -95,12 +95,12 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
     }
 
     /// <summary>
-    /// Builds the RS256-signed login JWT. The issuer and subject use the bare account locator —
-    /// a region/cloud suffix (anything after the first '.') is dropped — and the issuer carries
-    /// the public-key fingerprint as <c>SHA256:</c> + base64(SHA-256(SubjectPublicKeyInfo)),
+    /// Builds the RS256-signed login JWT. The issuer and subject use the bare account locator
+    /// (<see cref="ConnectionConfig.AccountName"/>, so no region/cloud suffix) and the issuer
+    /// carries the public-key fingerprint as <c>SHA256:</c> + base64(SHA-256(SubjectPublicKeyInfo)),
     /// matching gosnowflake and connector-net; Snowflake rejects the token without the prefix.
     /// </summary>
-    internal static string GenerateJwtToken(string account, string user, string privateKeyPem, string? passphrase)
+    internal static string GenerateJwtToken(string accountName, string user, string privateKeyPem, string? passphrase)
     {
         try
         {
@@ -118,8 +118,7 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             var publicKey = rsa.ExportSubjectPublicKeyInfo();
             var publicKeyFingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData(publicKey));
 
-            int regionSeparator = account.IndexOf('.');
-            string accountName = (regionSeparator > 0 ? account[..regionSeparator] : account).ToUpperInvariant();
+            string issuerAccount = accountName.ToUpperInvariant();
             string userName = user.ToUpperInvariant();
 
             var header = new
@@ -131,8 +130,8 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var payload = new
             {
-                iss = $"{accountName}.{userName}.{publicKeyFingerprint}",
-                sub = $"{accountName}.{userName}",
+                iss = $"{issuerAccount}.{userName}.{publicKeyFingerprint}",
+                sub = $"{issuerAccount}.{userName}",
                 iat = now,
                 exp = now + 3600
             };

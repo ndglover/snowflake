@@ -14,6 +14,8 @@
 * limitations under the License.
 */
 
+using System;
+
 namespace AdbcDrivers.Snowflake.Native.Services;
 
 /// <summary>
@@ -21,34 +23,46 @@ namespace AdbcDrivers.Snowflake.Native.Services;
 /// </summary>
 internal static class SnowflakeAccountUrl
 {
-    /// <summary>
-    /// Builds the HTTPS base URL for a Snowflake account.
-    /// Handles privatelink accounts correctly by only treating the value as a
-    /// full hostname if it already contains 'snowflakecomputing.com'.
-    /// </summary>
-    internal static string Build(string account)
-    {
-        return account.Contains("snowflakecomputing.com", System.StringComparison.OrdinalIgnoreCase)
-            ? $"https://{account}"
-            : $"https://{account}.snowflakecomputing.com";
-    }
+    const string DefaultDomain = ".snowflakecomputing.com";
+    const string ChinaDomain = ".snowflakecomputing.cn";
+    const int DefaultPort = 443;
 
     /// <summary>
-    /// Builds the base URL for a Snowflake account, using explicit host/port/protocol if provided.
+    /// Builds the base URL for a Snowflake account. An explicit host override is used as-is;
+    /// otherwise the host is derived from the account identifier, which carries its region and
+    /// cloud suffix (for example xy12345.us-east-1.aws).
     /// </summary>
     internal static string Build(string account, Configuration.NetworkConfig? network)
     {
-        if (network != null && !string.IsNullOrEmpty(network.Host))
-        {
-            var port = network.Port != 443 ? $":{network.Port}" : string.Empty;
-            return $"{network.Protocol}://{network.Host}{port}";
-        }
+        var host = network?.Host;
+        if (string.IsNullOrEmpty(host))
+            host = BuildHost(account, network?.Region);
 
         var protocol = network?.Protocol ?? "https";
-        var host = account.Contains("snowflakecomputing.com", System.StringComparison.OrdinalIgnoreCase)
-            ? account
-            : $"{account}.snowflakecomputing.com";
-        var portSuffix = (network != null && network.Port != 443) ? $":{network.Port}" : string.Empty;
-        return $"{protocol}://{host}{portSuffix}";
+        var port = network != null && network.Port != DefaultPort ? $":{network.Port}" : string.Empty;
+
+        return $"{protocol}://{host}{port}";
     }
+
+    /// <summary>
+    /// The region reaches us either as a suffix on the account identifier (xy12345.us-east-1) or
+    /// as a separate parameter; the parser rejects configurations that supply both.
+    /// </summary>
+    static string BuildHost(string account, string? region)
+    {
+        if (!string.IsNullOrEmpty(region))
+            return $"{account}.{region}{DomainFor(region)}";
+
+        int regionSeparator = account.IndexOf('.');
+        var accountRegion = regionSeparator > 0 ? account[(regionSeparator + 1)..] : string.Empty;
+
+        return $"{account}{DomainFor(accountRegion)}";
+    }
+
+    /// <summary>
+    /// China accounts live under their own top-level domain, identified by the cn- region prefix
+    /// (for example xy12345.cn-north-1). Every other region uses the default domain.
+    /// </summary>
+    static string DomainFor(string region) =>
+        region.StartsWith("cn-", StringComparison.OrdinalIgnoreCase) ? ChinaDomain : DefaultDomain;
 }

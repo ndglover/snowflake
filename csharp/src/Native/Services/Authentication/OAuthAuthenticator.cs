@@ -53,7 +53,7 @@ internal class OAuthAuthenticator : IOAuthAuthenticator
             TOKEN = config.Authentication.Token
         };
 
-        return await _loginClient.LoginAsync(config.Account, authData, config, cancellationToken).ConfigureAwait(false);
+        return await _loginClient.LoginAsync(config, authData, cancellationToken).ConfigureAwait(false);
     }
 
     internal static void ValidateRequirements(ConnectionConfig config)

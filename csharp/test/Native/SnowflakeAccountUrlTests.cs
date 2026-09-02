@@ -29,31 +29,41 @@ public class SnowflakeAccountUrlTests
     [Fact]
     public void Build_PlainAccount_AppendsSnowflakeDomain()
     {
-        Assert.Equal("https://xy12345.snowflakecomputing.com", SnowflakeAccountUrl.Build("xy12345"));
-    }
-
-    [Fact]
-    public void Build_FullHostname_DoesNotDoubleAppend()
-    {
-        Assert.Equal(
-            "https://xy12345.snowflakecomputing.com",
-            SnowflakeAccountUrl.Build("xy12345.snowflakecomputing.com"));
-    }
-
-    [Fact]
-    public void Build_FullHostname_IsCaseInsensitive()
-    {
-        Assert.Equal(
-            "https://xy12345.SNOWFLAKECOMPUTING.COM",
-            SnowflakeAccountUrl.Build("xy12345.SNOWFLAKECOMPUTING.COM"));
-    }
-
-    [Fact]
-    public void Build_NullNetwork_BehavesLikePlainAccount()
-    {
         Assert.Equal(
             "https://xy12345.snowflakecomputing.com",
             SnowflakeAccountUrl.Build("xy12345", network: null));
+    }
+
+    [Fact]
+    public void Build_RegionSuffixedAccount_KeepsSuffixInHost()
+    {
+        Assert.Equal(
+            "https://xy12345.us-east-1.aws.snowflakecomputing.com",
+            SnowflakeAccountUrl.Build("xy12345.us-east-1.aws", network: null));
+    }
+
+    [Fact]
+    public void Build_ChinaRegionAccount_UsesChinaDomain()
+    {
+        Assert.Equal(
+            "https://xy12345.cn-north-1.snowflakecomputing.cn",
+            SnowflakeAccountUrl.Build("xy12345.cn-north-1", network: null));
+    }
+
+    [Fact]
+    public void Build_ChinaRegionAccount_IsCaseInsensitive()
+    {
+        Assert.Equal(
+            "https://xy12345.CN-NORTH-1.snowflakecomputing.cn",
+            SnowflakeAccountUrl.Build("xy12345.CN-NORTH-1", network: null));
+    }
+
+    [Fact]
+    public void Build_NonChinaRegionStartingWithC_UsesDefaultDomain()
+    {
+        Assert.Equal(
+            "https://xy12345.ca-central-1.snowflakecomputing.com",
+            SnowflakeAccountUrl.Build("xy12345.ca-central-1", network: null));
     }
 
     [Fact]
@@ -82,5 +92,48 @@ public class SnowflakeAccountUrlTests
     {
         var network = new NetworkConfig { Port = 8443 };
         Assert.Equal("https://xy12345.snowflakecomputing.com:8443", SnowflakeAccountUrl.Build("xy12345", network));
+    }
+
+    [Fact]
+    public void Build_ExplicitRegion_IsAppendedToAccount()
+    {
+        var network = new NetworkConfig { Region = "us-east-1" };
+        Assert.Equal(
+            "https://xy12345.us-east-1.snowflakecomputing.com",
+            SnowflakeAccountUrl.Build("xy12345", network));
+    }
+
+    [Fact]
+    public void Build_ExplicitRegionWithCloud_IsAppendedToAccount()
+    {
+        var network = new NetworkConfig { Region = "us-east-1.aws" };
+        Assert.Equal(
+            "https://xy12345.us-east-1.aws.snowflakecomputing.com",
+            SnowflakeAccountUrl.Build("xy12345", network));
+    }
+
+    [Fact]
+    public void Build_ExplicitChinaRegion_UsesChinaDomain()
+    {
+        var network = new NetworkConfig { Region = "cn-north-1" };
+        Assert.Equal(
+            "https://xy12345.cn-north-1.snowflakecomputing.cn",
+            SnowflakeAccountUrl.Build("xy12345", network));
+    }
+
+    [Fact]
+    public void Build_NetworkHost_TakesPrecedenceOverRegion()
+    {
+        var network = new NetworkConfig { Host = "myhost.example.com", Region = "us-east-1" };
+        Assert.Equal("https://myhost.example.com", SnowflakeAccountUrl.Build("xy12345", network));
+    }
+
+    [Fact]
+    public void Build_NetworkHost_TakesPrecedenceOverAccount()
+    {
+        var network = new NetworkConfig { Host = "xy12345.privatelink.snowflakecomputing.com" };
+        Assert.Equal(
+            "https://xy12345.privatelink.snowflakecomputing.com",
+            SnowflakeAccountUrl.Build("xy12345.cn-north-1", network));
     }
 }

@@ -174,7 +174,7 @@ where an official key exists; pool keys are this driver's own (`adbc.snowflake.p
 
 | Key | Meaning | Default |
 |-----|---------|---------|
-| `adbc.snowflake.sql.account` | Account identifier (**required**) | — |
+| `adbc.snowflake.sql.account` | Account identifier, optionally region/cloud-suffixed — `xy12345`, `xy12345.us-east-1`, `myorg-my_account` (**required**). A host name is rejected; use `adbc.snowflake.sql.uri.host` for endpoint overrides | — |
 | `username` / `password` | Credentials for password auth | — |
 | `adbc.snowflake.sql.db` / `.schema` / `.warehouse` / `.role` | Session context | — |
 | `adbc.snowflake.statement.query_tag` | Query tag shown in the Snowsight query history; connection-level default, overridable per statement via `SetOption` | — |
@@ -183,6 +183,7 @@ where an official key exists; pool keys are this driver's own (`adbc.snowflake.p
 | `adbc.snowflake.sql.client_option.jwt_private_key` | Key-pair auth: path to the private-key PEM file | — |
 | `adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value` / `_password` | Key-pair auth: inline PEM / passphrase for encrypted keys | — |
 | `adbc.snowflake.sql.client_option.auth_token` | Access token (OAuth or PAT, per `auth_type`) | — |
+| `adbc.snowflake.sql.region` | Region/cloud the account lives in (`us-east-1`, `us-east-1.aws`), for accounts given without a region suffix. Conflicts with a suffixed account | — |
 | `adbc.snowflake.sql.uri.host` / `.port` / `.protocol` | Endpoint override (PrivateLink etc.) | account URL |
 | `adbc.snowflake.sql.client_option.tls_skip_verify` | Skip TLS certificate validation (**test only**) | `false` |
 | `adbc.snowflake.sql.client_option.no_proxy` | Bypass the system proxy | `false` |

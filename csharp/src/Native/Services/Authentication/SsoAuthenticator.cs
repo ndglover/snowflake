@@ -81,7 +81,6 @@ internal class SsoAuthenticator : ISsoAuthenticator
         ArgumentNullException.ThrowIfNull(config);
         ValidateRequirements(config);
 
-        string account = config.Account;
         string user = config.User;
 
         // Step 1: Find a free port and start the local HTTP listener
@@ -93,7 +92,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
         {
             // Step 2: Get SSO URL and proof key from Snowflake
             var (ssoUrl, proofKey) = await GetSsoUrlAndProofKeyAsync(
-                account, user, localPort, cancellationToken).ConfigureAwait(false);
+                config, localPort, cancellationToken).ConfigureAwait(false);
 
             // Step 3: Open browser for user authentication
             OpenBrowser(ssoUrl);
@@ -110,7 +109,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
                 PROOF_KEY = proofKey
             };
 
-            return await _loginClient.LoginAsync(account, authData, config, cancellationToken).ConfigureAwait(false);
+            return await _loginClient.LoginAsync(config, authData, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -131,18 +130,22 @@ internal class SsoAuthenticator : ISsoAuthenticator
     }
 
     private async Task<(string SsoUrl, string ProofKey)> GetSsoUrlAndProofKeyAsync(
-        string account,
-        string user,
+        ConnectionConfig config,
         int localPort,
         CancellationToken cancellationToken)
     {
-        var authenticatorUrl = _loginClient.BuildUrl(account, SnowflakeLoginClient.AuthenticatorEndpoint);
+        // Endpoint discovery precedes the session, so it carries no session parameters — but it
+        // must still honour the host/port/protocol overrides, or a PrivateLink deployment sends
+        // this request to the public endpoint while the login that follows goes to the private one.
+        var authenticatorUrl = _loginClient.BuildUrl(
+            config, SnowflakeLoginClient.AuthenticatorEndpoint, includeSessionParameters: false);
+
         var authenticatorRequest = new LoginRequestBody
         {
             Data = new LoginRequestData
             {
-                ACCOUNT_NAME = account,
-                LOGIN_NAME = user,
+                ACCOUNT_NAME = config.AccountName,
+                LOGIN_NAME = config.User,
                 AUTHENTICATOR = "EXTERNALBROWSER",
                 BROWSER_MODE_REDIRECT_PORT = localPort.ToString(),
                 CLIENT_APP_ID = ".NET",

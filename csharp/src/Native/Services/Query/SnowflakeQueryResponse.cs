@@ -90,4 +90,33 @@ internal sealed class RowType
 
     [JsonPropertyName("nullable")]
     public bool? Nullable { get; set; }
+
+    /// <summary>Element count of a VECTOR column; absent for every other type.</summary>
+    [JsonPropertyName("vectorDimension")]
+    public int? VectorDimension { get; set; }
+
+    /// <summary>
+    /// Element types of a compound type. Only VECTOR uses it here, where it holds the single
+    /// element type ('fixed' or 'real').
+    /// </summary>
+    [JsonPropertyName("fields")]
+    public List<RowTypeField>? Fields { get; set; }
+}
+
+/// <summary>
+/// The element type of a compound column, as reported inside a rowtype entry's <c>fields</c>.
+/// </summary>
+internal sealed class RowTypeField
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("precision")]
+    public int? Precision { get; set; }
+
+    [JsonPropertyName("scale")]
+    public int? Scale { get; set; }
+
+    [JsonPropertyName("nullable")]
+    public bool? Nullable { get; set; }
 }

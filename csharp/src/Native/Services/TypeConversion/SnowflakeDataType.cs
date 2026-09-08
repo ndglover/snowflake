@@ -47,6 +47,17 @@ internal class SnowflakeDataType
     public bool IsNullable { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the element count of a VECTOR column.
+    /// </summary>
+    public int? VectorDimension { get; set; }
+
+    /// <summary>
+    /// Gets or sets the element type of a VECTOR column: 'fixed' for VECTOR(INT, n), 'real' for
+    /// VECTOR(FLOAT, n). Snowflake accepts no other element type.
+    /// </summary>
+    public string? ElementTypeName { get; set; }
+
+    /// <summary>
     /// Gets or sets the timezone (for timestamp types).
     /// </summary>
     public string? Timezone { get; set; }
@@ -60,24 +71,20 @@ internal class SnowflakeDataType
     {
         return typeName.ToUpperInvariant() switch
         {
-            "FIXED" or "NUMBER" or "DECIMAL" or "NUMERIC" => SnowflakeTypeCode.Number,
-            "INTEGER" or "INT" or "BIGINT" or "SMALLINT" or "TINYINT" or "BYTEINT" => SnowflakeTypeCode.Integer,
-            "FLOAT" or "FLOAT4" or "FLOAT8" => SnowflakeTypeCode.Float,
-            "DOUBLE" or "DOUBLE PRECISION" or "REAL" => SnowflakeTypeCode.Double,
-            "VARCHAR" or "STRING" or "TEXT" or "CHAR" or "CHARACTER" => SnowflakeTypeCode.Varchar,
-            "BINARY" or "VARBINARY" => SnowflakeTypeCode.Binary,
+            "FIXED" => SnowflakeTypeCode.Number,
+            "REAL" => SnowflakeTypeCode.Double,
+            "TEXT" => SnowflakeTypeCode.Varchar,
+            "BINARY" => SnowflakeTypeCode.Binary,
             "BOOLEAN" => SnowflakeTypeCode.Boolean,
             "DATE" => SnowflakeTypeCode.Date,
             "TIME" => SnowflakeTypeCode.Time,
-            "TIMESTAMP" or "DATETIME" => SnowflakeTypeCode.Timestamp,
             "TIMESTAMP_LTZ" => SnowflakeTypeCode.TimestampLtz,
             "TIMESTAMP_NTZ" => SnowflakeTypeCode.TimestampNtz,
             "TIMESTAMP_TZ" => SnowflakeTypeCode.TimestampTz,
             "VARIANT" => SnowflakeTypeCode.Variant,
             "OBJECT" => SnowflakeTypeCode.Object,
             "ARRAY" => SnowflakeTypeCode.Array,
-            "GEOGRAPHY" => SnowflakeTypeCode.Geography,
-            "GEOMETRY" => SnowflakeTypeCode.Geometry,
+            "VECTOR" => SnowflakeTypeCode.Vector,
             _ => SnowflakeTypeCode.Unknown
         };
     }

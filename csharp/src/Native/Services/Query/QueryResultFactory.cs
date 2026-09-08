@@ -316,7 +316,9 @@ internal sealed class QueryResultFactory(IRestApiClient apiClient, ITypeConverte
                 Precision = rowType.Precision,
                 Scale = rowType.Scale,
                 Length = rowType.Length,
-                IsNullable = rowType.Nullable ?? true
+                IsNullable = rowType.Nullable ?? true,
+                VectorDimension = rowType.VectorDimension,
+                ElementTypeName = rowType.Fields is { Count: > 0 } elementTypes ? elementTypes[0].Type : null
             };
 
             fields.Add(new Field(

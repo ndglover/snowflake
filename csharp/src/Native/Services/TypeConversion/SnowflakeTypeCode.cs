@@ -23,21 +23,17 @@ internal enum SnowflakeTypeCode
 {
     Unknown,
     Number,
-    Integer,
-    Float,
     Double,
     Varchar,
     Binary,
     Boolean,
     Date,
     Time,
-    Timestamp,
     TimestampLtz,
     TimestampNtz,
     TimestampTz,
     Variant,
     Object,
     Array,
-    Geography,
-    Geometry
+    Vector
 }

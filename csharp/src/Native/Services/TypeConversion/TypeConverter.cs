@@ -41,15 +41,12 @@ internal class TypeConverter : ITypeConverter
         {
             SnowflakeTypeCode.Boolean => BooleanType.Default,
 
-            // INTEGER/INT/BIGINT/SMALLINT/TINYINT/BYTEINT are all NUMBER(38,0) in Snowflake, so
-            // they size by precision the same way FIXED/NUMBER does.
-            SnowflakeTypeCode.Integer or
+            // FIXED covers every NUMBER/DECIMAL/INT alias, sized by its declared precision.
             SnowflakeTypeCode.Number => FixedToArrowType(
                 snowflakeType.Precision.GetValueOrDefault(38),
                 snowflakeType.Scale.GetValueOrDefault(0)),
 
-            SnowflakeTypeCode.Float => FloatType.Default,
-
+            // REAL covers every FLOAT/DOUBLE alias.
             SnowflakeTypeCode.Double => DoubleType.Default,
 
             SnowflakeTypeCode.Varchar => StringType.Default,
@@ -60,7 +57,6 @@ internal class TypeConverter : ITypeConverter
 
             SnowflakeTypeCode.Time => TimeType.Nanosecond,
 
-            SnowflakeTypeCode.Timestamp or
             SnowflakeTypeCode.TimestampNtz => new TimestampType(TimeUnit.Nanosecond, timezone: (string?)null),
 
             SnowflakeTypeCode.TimestampLtz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
@@ -69,16 +65,41 @@ internal class TypeConverter : ITypeConverter
             // cannot carry a per-row offset), so the described type matches: Timestamp[ns] "UTC".
             SnowflakeTypeCode.TimestampTz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
 
+            // Semi-structured data arrives as a JSON string, ARRAY included - Snowflake serialises
+            // the whole value as text rather than sending a nested Arrow type, and does so even for
+            // a structured ARRAY(NUMBER). Describing an array as a list would promise a shape the
+            // result never carries. Geospatial columns report as OBJECT, so GEOGRAPHY/GEOMETRY land
+            // here too and surface their GeoJSON the same way.
             SnowflakeTypeCode.Variant or
-            SnowflakeTypeCode.Object => StringType.Default, // JSON as string
+            SnowflakeTypeCode.Object or
+            SnowflakeTypeCode.Array => StringType.Default,
 
-            SnowflakeTypeCode.Array => new ListType(StringType.Default), // Array of JSON strings
-
-            SnowflakeTypeCode.Geography or
-            SnowflakeTypeCode.Geometry => StringType.Default, // GeoJSON as string
+            SnowflakeTypeCode.Vector => VectorToArrowType(snowflakeType),
 
             _ => throw new NotSupportedException($"Snowflake type {snowflakeType.TypeName} is not supported.")
         };
+    }
+
+    /// <summary>
+    /// A VECTOR is a fixed-width list whose element type Snowflake restricts to INT or FLOAT,
+    /// reported as 'fixed' and 'real'. Those two names mean something narrower here than at the top
+    /// level, where they size by precision and map to double: a vector's elements are always Int32
+    /// or Float, matching what the result decoder produces.
+    /// </summary>
+    private static IArrowType VectorToArrowType(SnowflakeDataType snowflakeType)
+    {
+        IArrowType elementType = snowflakeType.ElementTypeName?.ToUpperInvariant() switch
+        {
+            "FIXED" => Int32Type.Default,
+            "REAL" => FloatType.Default,
+            _ => throw new NotSupportedException(
+                $"Snowflake vector element type {snowflakeType.ElementTypeName ?? "(missing)"} is not supported.")
+        };
+
+        if (snowflakeType.VectorDimension is not { } dimension)
+            throw new NotSupportedException("Snowflake vector column is missing its dimension.");
+
+        return new FixedSizeListType(new Field("item", elementType, nullable: false), dimension);
     }
 
     // Largest decimal precision guaranteed to fit each integer width (Int32 holds 9 full digits,

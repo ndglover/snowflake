@@ -47,27 +47,17 @@ public class TypeConverterTests
     private readonly TypeConverter _converter = new();
 
     // ---- ConvertSnowflakeTypeToArrow ----
-
     [Theory]
     [InlineData("BOOLEAN", typeof(BooleanType))]
-    // INTEGER/INT/BIGINT are NUMBER(38,0) in Snowflake → sized like NUMBER(38,0) (Decimal128).
-    [InlineData("INTEGER", typeof(Decimal128Type))]
-    [InlineData("INT", typeof(Decimal128Type))]
-    [InlineData("BIGINT", typeof(Decimal128Type))]
-    [InlineData("FLOAT", typeof(FloatType))]
-    [InlineData("DOUBLE", typeof(DoubleType))]
+    [InlineData("FIXED", typeof(Decimal128Type))]
     [InlineData("REAL", typeof(DoubleType))]
-    [InlineData("VARCHAR", typeof(StringType))]
-    [InlineData("STRING", typeof(StringType))]
     [InlineData("TEXT", typeof(StringType))]
     [InlineData("BINARY", typeof(BinaryType))]
     [InlineData("DATE", typeof(Date32Type))]
     [InlineData("TIME", typeof(Time64Type))]
     [InlineData("VARIANT", typeof(StringType))]
     [InlineData("OBJECT", typeof(StringType))]
-    [InlineData("ARRAY", typeof(ListType))]
-    [InlineData("GEOGRAPHY", typeof(StringType))]
-    [InlineData("GEOMETRY", typeof(StringType))]
+    [InlineData("ARRAY", typeof(StringType))]
     public void ConvertSnowflakeTypeToArrow_MapsScalarTypes(string typeName, Type expectedArrowType)
     {
         IArrowType result = _converter.ConvertSnowflakeTypeToArrow(new SnowflakeDataType { TypeName = typeName });
@@ -80,10 +70,10 @@ public class TypeConverterTests
     [InlineData(38, typeof(Decimal128Type))]
     public void ConvertSnowflakeTypeToArrow_ScaleZeroNumber_SizedByPrecision(int precision, Type expectedArrowType)
     {
-        // Matches the result decoder: a scale-0 NUMBER is sized by its declared precision so the
+        // Matches the result decoder: a scale-0 FIXED is sized by its declared precision so the
         // described schema agrees with what a query returns.
         IArrowType result = _converter.ConvertSnowflakeTypeToArrow(
-            new SnowflakeDataType { TypeName = "NUMBER", Precision = precision, Scale = 0 });
+            new SnowflakeDataType { TypeName = "FIXED", Precision = precision, Scale = 0 });
         Assert.IsType(expectedArrowType, result);
     }
 
@@ -91,24 +81,23 @@ public class TypeConverterTests
     public void ConvertSnowflakeTypeToArrow_NumberWithScale_IsDecimal128()
     {
         IArrowType result = _converter.ConvertSnowflakeTypeToArrow(
-            new SnowflakeDataType { TypeName = "NUMBER", Precision = 18, Scale = 2 });
+            new SnowflakeDataType { TypeName = "FIXED", Precision = 18, Scale = 2 });
         var decimalType = Assert.IsType<Decimal128Type>(result);
         Assert.Equal(18, decimalType.Precision);
         Assert.Equal(2, decimalType.Scale);
     }
 
     [Fact]
-    public void ConvertSnowflakeTypeToArrow_Array_IsListOfString()
+    public void ConvertSnowflakeTypeToArrow_Array_IsJsonString()
     {
+        // Snowflake serialises ARRAY as JSON text rather than a nested Arrow type, so the described
+        // type is a string - the same thing the result decoder produces.
         IArrowType result = _converter.ConvertSnowflakeTypeToArrow(new SnowflakeDataType { TypeName = "ARRAY" });
-        var listType = Assert.IsType<ListType>(result);
-        Assert.IsType<StringType>(listType.ValueDataType);
+        Assert.IsType<StringType>(result);
     }
 
     [Theory]
     [InlineData("TIMESTAMP_NTZ", null)]
-    [InlineData("TIMESTAMP", null)]
-    [InlineData("DATETIME", null)]
     [InlineData("TIMESTAMP_LTZ", "UTC")]
     public void ConvertSnowflakeTypeToArrow_Timestamp_HasExpectedTimezone(string typeName, string? expectedTimezone)
     {
@@ -129,11 +118,54 @@ public class TypeConverterTests
         Assert.Equal("UTC", result.Timezone);
     }
 
+    [Theory]
+    [InlineData("FIXED", 3, typeof(Int32Type))]
+    [InlineData("REAL", 3, typeof(FloatType))]
+    [InlineData("REAL", 1, typeof(FloatType))]
+    [InlineData("FIXED", 1536, typeof(Int32Type))]
+    public void ConvertSnowflakeTypeToArrow_Vector_IsFixedSizeListOfItsElementType(
+        string elementTypeName, int dimension, Type expectedElementType)
+    {
+        // A vector's element names are narrower than the same names at the top level: FIXED is
+        // Int32 rather than precision-sized, REAL is Float rather than Double, matching the decoder.
+        var result = Assert.IsType<FixedSizeListType>(_converter.ConvertSnowflakeTypeToArrow(
+            new SnowflakeDataType
+            {
+                TypeName = "VECTOR",
+                VectorDimension = dimension,
+                ElementTypeName = elementTypeName
+            }));
+
+        Assert.Equal(dimension, result.ListSize);
+        Assert.IsType(expectedElementType, result.ValueDataType);
+        Assert.False(result.ValueField.IsNullable);
+    }
+
     [Fact]
-    public void ConvertSnowflakeTypeToArrow_UnknownType_Throws()
+    public void ConvertSnowflakeTypeToArrow_VectorWithoutDimension_Throws()
+    {
+        Assert.Throws<NotSupportedException>(() => _converter.ConvertSnowflakeTypeToArrow(
+            new SnowflakeDataType { TypeName = "VECTOR", ElementTypeName = "REAL" }));
+    }
+
+    [Fact]
+    public void ConvertSnowflakeTypeToArrow_VectorWithUnknownElementType_Throws()
+    {
+        Assert.Throws<NotSupportedException>(() => _converter.ConvertSnowflakeTypeToArrow(
+            new SnowflakeDataType { TypeName = "VECTOR", VectorDimension = 3, ElementTypeName = "TEXT" }));
+    }
+
+    [Theory]
+    [InlineData("NONSENSE")]
+    // SQL spellings are deliberately not mapped: Snowflake reports the logical type, so one of
+    // these appearing in rowtype metadata would mean the protocol changed.
+    [InlineData("NUMBER")]
+    [InlineData("VARCHAR")]
+    [InlineData("GEOGRAPHY")]
+    public void ConvertSnowflakeTypeToArrow_UnmappedType_Throws(string typeName)
     {
         Assert.Throws<NotSupportedException>(
-            () => _converter.ConvertSnowflakeTypeToArrow(new SnowflakeDataType { TypeName = "NONSENSE" }));
+            () => _converter.ConvertSnowflakeTypeToArrow(new SnowflakeDataType { TypeName = typeName }));
     }
 
     [Fact]

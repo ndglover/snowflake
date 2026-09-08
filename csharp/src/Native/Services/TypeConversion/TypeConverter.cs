@@ -61,8 +61,10 @@ internal class TypeConverter : ITypeConverter
 
             SnowflakeTypeCode.TimestampLtz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
 
-            // The result decoder stores TIMESTAMP_TZ as its UTC instant (a single Arrow column
-            // cannot carry a per-row offset), so the described type matches: Timestamp[ns] "UTC".
+            // The result decoder stores TIMESTAMP_TZ as its UTC instant, dropping the per-row
+            // offset, so the described type matches: Timestamp[ns] "UTC". Keeping the offset would
+            // mean the arrow.timestamp_with_offset extension type, which needs Apache.Arrow 23.0.0;
+            // the arrow-adbc submodule pins 22.1.0.
             SnowflakeTypeCode.TimestampTz => new TimestampType(TimeUnit.Nanosecond, timezone: "UTC"),
 
             // Semi-structured data arrives as a JSON string, ARRAY included - Snowflake serialises

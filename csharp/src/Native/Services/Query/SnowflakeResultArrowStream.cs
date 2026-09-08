@@ -47,8 +47,10 @@ namespace AdbcDrivers.Snowflake.Native.Services.Query;
 /// 10^-scale units) or as a struct: <c>epoch</c> (seconds) plus, when the scale needs it, a
 /// <c>fraction</c> (nanoseconds) and, for TZ, a <c>timezone</c> field. They are decoded to
 /// <see cref="TimestampType"/> nanoseconds (NTZ has no zone; LTZ/TZ carry the UTC instant). The
-/// per-row TZ offset is not representable in a single Arrow column, so it is dropped after being
-/// applied to reach the UTC instant. Nanosecond timestamps cannot represent dates beyond ~2262.</para>
+/// per-row TZ offset is applied to reach that instant and then dropped: representing it would need
+/// the arrow.timestamp_with_offset extension type, which Apache.Arrow gained in 23.0.0, and the
+/// arrow-adbc submodule still pins 22.1.0. Nanosecond timestamps cannot represent dates beyond
+/// ~2262.</para>
 /// <para>Columns of any other type, and FIXED columns whose wire type already matches the target,
 /// are passed through unchanged. Field metadata is preserved on rewritten columns.</para>
 /// </remarks>
@@ -157,8 +159,8 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
                 case TimestampLtzLogicalType:
                 case TimestampTzLogicalType:
                 {
-                    // TZ carries a per-row offset field (dropped — we store the UTC instant); NTZ
-                    // has no zone, LTZ/TZ are tagged UTC.
+                    // TZ carries a per-row offset field, which is applied and then dropped so the
+                    // stored value is the UTC instant; NTZ has no zone, LTZ/TZ are tagged UTC.
                     bool hasTimezoneField = logicalType == TimestampTzLogicalType;
                     string? timezone = logicalType == TimestampNtzLogicalType ? null : Utc;
                     var target = new TimestampType(TimeUnit.Nanosecond, timezone);
@@ -294,7 +296,7 @@ internal sealed class SnowflakeResultArrowStream : Ipc.IArrowArrayStream
         if (source is StructArray structArray)
         {
             // Field 0 is always the epoch. A timezone-carrying value's trailing field is the
-            // per-row offset, which we drop (the stored value is the UTC instant). A separate
+            // per-row offset, which is applied and then dropped. A separate
             // nanosecond fraction sits at field 1 for every shape except the 2-field timezone
             // struct, where the epoch already holds the whole timestamp in 10^-scale units. The
             // shape is determined by the known logical type + field count, never by field names.

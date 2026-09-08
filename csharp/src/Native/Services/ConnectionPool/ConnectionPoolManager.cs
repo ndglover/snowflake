@@ -135,9 +135,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager
                 AdbcStatusCode.Timeout);
     }
 
-    // Takes the evaluation instant as a parameter (rather than reading _timeProvider itself) so the
-    // clock is never touched while a caller holds poolEntry.IdleLock — no external call under a lock,
-    // and every connection in one operation is judged against the same instant.
+    // Takes the evaluation instant as a parameter (rather than reading _timeProvider itself) so
+    // every connection in one operation is judged against the same instant.
     private static bool IsConnectionValid(IPooledConnection connection, DateTimeOffset now)
     {
         return connection is { IsDisposed: false, IsFaulted: false, IsTokenExpired: false } &&
@@ -155,25 +154,22 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         List<IPooledConnection>? stale = null;
         idleConnection = null;
 
-        lock (poolEntry.IdleLock)
+        while (poolEntry.IdleConnections.TryPop(out var connection))
         {
-            while (poolEntry.IdleConnections.TryPop(out var connection))
+            if (IsConnectionValid(connection, now))
             {
-                if (IsConnectionValid(connection, now))
-                {
-                    connection.UpdateLastUsedAt();
-                    poolEntry.ActiveConnections.TryAdd(connection.ConnectionId, connection);
-                    idleConnection = connection;
-                    break;
-                }
-
-                (stale ??= []).Add(connection);
+                connection.UpdateLastUsedAt();
+                poolEntry.ActiveConnections.TryAdd(connection.ConnectionId, connection);
+                idleConnection = connection;
+                break;
             }
+
+            (stale ??= []).Add(connection);
         }
 
-        // Dispose OUTSIDE the lock: Dispose best-effort closes the server-side session — a bounded
-        // network wait — and holding IdleLock across it would stall every other acquire/release on
-        // this pool entry for up to 5s per stale connection.
+        // Dispose after the drain rather than inside it: Dispose best-effort closes the server-side
+        // session, a bounded network wait, and doing that mid-drain would hold up this acquire for
+        // up to 5s per stale connection.
         if (stale != null)
         {
             foreach (var connection in stale)
@@ -293,22 +289,24 @@ internal class ConnectionPoolManager : IConnectionPoolManager
             var now = _timeProvider.GetUtcNow();
             var connectionsToKeep = new List<IPooledConnection>();
             var connectionsToRemove = new List<IPooledConnection>();
-            lock (poolEntry.IdleLock)
-            {
-                while (poolEntry.IdleConnections.TryPop(out var connection))
-                {
-                    var idleTime = now - connection.LastUsedAt;
-                    if (!IsConnectionValid(connection, now) ||
-                        idleTime > poolEntry.Config.PoolConfig.IdleTimeout)
-                        connectionsToRemove.Add(connection);
-                    else
-                        connectionsToKeep.Add(connection);
-                }
 
-                foreach (IPooledConnection pooledConnection in connectionsToKeep)
-                {
-                    poolEntry.IdleConnections.Push(pooledConnection);
-                }
+            // The stack is briefly emptier than it will end up, so an acquire landing here can
+            // create a connection it did not need. That costs one login, is bounded by the pool's
+            // capacity semaphore, and the extra connection is reaped by a later sweep - cheaper
+            // than serialising every acquire behind this sweep.
+            while (poolEntry.IdleConnections.TryPop(out var connection))
+            {
+                var idleTime = now - connection.LastUsedAt;
+                if (!IsConnectionValid(connection, now) ||
+                    idleTime > poolEntry.Config.PoolConfig.IdleTimeout)
+                    connectionsToRemove.Add(connection);
+                else
+                    connectionsToKeep.Add(connection);
+            }
+
+            foreach (IPooledConnection pooledConnection in connectionsToKeep)
+            {
+                poolEntry.IdleConnections.Push(pooledConnection);
             }
 
             foreach (var connection in connectionsToRemove)

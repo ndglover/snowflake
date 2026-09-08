@@ -46,9 +46,4 @@ internal class ConnectionPoolEntry(ConnectionConfig config)
     internal SemaphoreSlim CapacitySemaphore { get; } = new(
         config.PoolConfig.MaxPoolSize,
         config.PoolConfig.MaxPoolSize);
-
-    /// <summary>
-    /// Lock object for synchronizing access to idle connections.
-    /// </summary>
-    internal readonly object IdleLock = new();
 }

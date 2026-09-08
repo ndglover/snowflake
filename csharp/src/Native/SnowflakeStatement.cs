@@ -34,7 +34,7 @@ namespace AdbcDrivers.Snowflake.Native;
 /// </summary>
 public sealed class SnowflakeStatement : AdbcStatement
 {
-    internal const string QueryTagOption = "adbc.snowflake.statement.query_tag";
+    internal const string QueryTagOption = SnowflakeParameters.QueryTag;
 
     private readonly ConnectionConfig _config;
     private readonly IPooledConnection _pooledConnection;

@@ -97,33 +97,33 @@ internal static class ConnectionStringParser
         var config = new ConnectionConfig
         {
             Account = ParseAccount(parameters),
-            User = GetOptionalParameter(parameters, "username") ?? string.Empty,
+            User = GetOptionalParameter(parameters, SnowflakeParameters.Username) ?? string.Empty,
             Database = GetOptionalParameter(parameters, AdbcOptions.Connection.CurrentCatalog)
-                       ?? GetOptionalParameter(parameters, "adbc.snowflake.sql.db"),
+                       ?? GetOptionalParameter(parameters, SnowflakeParameters.Database),
             Schema = GetOptionalParameter(parameters, AdbcOptions.Connection.CurrentDbSchema)
-                     ?? GetOptionalParameter(parameters, "adbc.snowflake.sql.schema"),
-            Warehouse = GetOptionalParameter(parameters, "adbc.snowflake.sql.warehouse"),
-            Role = GetOptionalParameter(parameters, "adbc.snowflake.sql.role"),
+                     ?? GetOptionalParameter(parameters, SnowflakeParameters.Schema),
+            Warehouse = GetOptionalParameter(parameters, SnowflakeParameters.Warehouse),
+            Role = GetOptionalParameter(parameters, SnowflakeParameters.Role),
             QueryTag = GetOptionalParameter(parameters, SnowflakeStatement.QueryTagOption),
             Authentication = ParseAuthenticationConfig(parameters)
         };
 
-        if (GetOptionalInt(parameters, "adbc.snowflake.sql.client_option.request_timeout") is { } requestTimeoutSeconds)
+        if (GetOptionalInt(parameters, SnowflakeParameters.RequestTimeout) is { } requestTimeoutSeconds)
             config.QueryTimeout = TimeSpan.FromSeconds(requestTimeoutSeconds);
 
-        if (GetOptionalInt(parameters, "adbc.snowflake.sql.client_option.login_timeout") is { } loginTimeoutSeconds)
+        if (GetOptionalInt(parameters, SnowflakeParameters.LoginTimeout) is { } loginTimeoutSeconds)
             config.LoginTimeout = TimeSpan.FromSeconds(loginTimeoutSeconds);
 
-        if (GetOptionalInt(parameters, "adbc.snowflake.rpc.prefetch_concurrency") is { } prefetch)
+        if (GetOptionalInt(parameters, SnowflakeParameters.PrefetchConcurrency) is { } prefetch)
             config.PrefetchConcurrency = Math.Max(1, prefetch);
 
-        if (GetOptionalBool(parameters, "adbc.snowflake.sql.client_option.enable_compression") is { } enableCompression)
+        if (GetOptionalBool(parameters, SnowflakeParameters.EnableCompression) is { } enableCompression)
             config.EnableCompression = enableCompression;
 
-        if (GetOptionalBool(parameters, "adbc.snowflake.sql.client_option.keep_session_alive") is { } keepAlive)
+        if (GetOptionalBool(parameters, SnowflakeParameters.KeepSessionAlive) is { } keepAlive)
             config.ClientSessionKeepAlive = keepAlive;
 
-        if (GetOptionalInt(parameters, "adbc.snowflake.sql.client_option.keep_session_alive_heartbeat_frequency") is { } freqSeconds)
+        if (GetOptionalInt(parameters, SnowflakeParameters.KeepSessionAliveHeartbeatFrequency) is { } freqSeconds)
         {
             // Clamp to a safe band: frequent enough to stay under the ~4h master window, but not
             // so frequent it hammers the server. Mirrors gosnowflake's heartbeat-frequency bounds.
@@ -150,7 +150,7 @@ internal static class ConnectionStringParser
 
     private static string ParseAccount(IReadOnlyDictionary<string, string> parameters)
     {
-        var account = GetRequiredParameter(parameters, "adbc.snowflake.sql.account");
+        var account = GetRequiredParameter(parameters, SnowflakeParameters.Account);
 
         if (account.Contains(SnowflakeDomain, StringComparison.OrdinalIgnoreCase))
         {
@@ -174,7 +174,7 @@ internal static class ConnectionStringParser
         var authConfig = new AuthenticationConfig();
 
         // ADBC standard: adbc.snowflake.sql.auth_type
-        string? authTypeStr = GetOptionalParameter(parameters, "adbc.snowflake.sql.auth_type");
+        string? authTypeStr = GetOptionalParameter(parameters, SnowflakeParameters.AuthType);
 
         if (authTypeStr != null)
         {
@@ -194,19 +194,19 @@ internal static class ConnectionStringParser
         }
 
         // Password - ADBC standard doesn't prefix this
-        authConfig.Password = GetOptionalParameter(parameters, "password");
+        authConfig.Password = GetOptionalParameter(parameters, SnowflakeParameters.Password);
 
         // Private key file path - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key
-        authConfig.PrivateKeyPath = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key");
+        authConfig.PrivateKeyPath = GetOptionalParameter(parameters, SnowflakeParameters.JwtPrivateKeyPath);
 
         // Private key value (inline PEM) - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value
-        authConfig.PrivateKey = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value");
+        authConfig.PrivateKey = GetOptionalParameter(parameters, SnowflakeParameters.JwtPrivateKeyValue);
 
         // Private key passphrase - ADBC standard: adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password
-        authConfig.PrivateKeyPassphrase = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password");
+        authConfig.PrivateKeyPassphrase = GetOptionalParameter(parameters, SnowflakeParameters.JwtPrivateKeyPassphrase);
 
         // Access token (OAuth or PAT, per auth_type) - ADBC standard: adbc.snowflake.sql.client_option.auth_token
-        authConfig.Token = GetOptionalParameter(parameters, "adbc.snowflake.sql.client_option.auth_token");
+        authConfig.Token = GetOptionalParameter(parameters, SnowflakeParameters.AuthToken);
 
         return authConfig;
     }
@@ -217,16 +217,16 @@ internal static class ConnectionStringParser
 
         // Client-side pooling is our own feature (the ADBC Snowflake/gosnowflake driver has none), so
         // these keys live under our own adbc.snowflake.pool.* namespace for consistency with the rest.
-        if (GetOptionalInt(parameters, "adbc.snowflake.pool.max_size") is { } maxPoolSize)
+        if (GetOptionalInt(parameters, SnowflakeParameters.PoolMaxSize) is { } maxPoolSize)
             poolConfig.MaxPoolSize = maxPoolSize;
 
-        if (GetOptionalParameter(parameters, "adbc.snowflake.pool.idle_timeout") is { } idleTimeoutStr)
+        if (GetOptionalParameter(parameters, SnowflakeParameters.PoolIdleTimeout) is { } idleTimeoutStr)
             poolConfig.IdleTimeout = ParseTimeSpan(idleTimeoutStr);
 
-        if (GetOptionalParameter(parameters, "adbc.snowflake.pool.acquire_timeout") is { } acquireTimeoutStr)
+        if (GetOptionalParameter(parameters, SnowflakeParameters.PoolAcquireTimeout) is { } acquireTimeoutStr)
             poolConfig.AcquireTimeout = ParseTimeSpan(acquireTimeoutStr);
 
-        if (GetOptionalParameter(parameters, "adbc.snowflake.pool.max_lifetime") is { } maxLifetimeStr)
+        if (GetOptionalParameter(parameters, SnowflakeParameters.PoolMaxLifetime) is { } maxLifetimeStr)
             poolConfig.MaxConnectionLifetime = ParseTimeSpan(maxLifetimeStr);
 
         return poolConfig;
@@ -269,7 +269,7 @@ internal static class ConnectionStringParser
         if (parameters is null)
             return network;
 
-        network.Host = GetOptionalParameter(parameters, "adbc.snowflake.sql.uri.host");
+        network.Host = GetOptionalParameter(parameters, SnowflakeParameters.Host);
 
         if (!string.IsNullOrEmpty(network.Host) && Uri.CheckHostName(network.Host) == UriHostNameType.Unknown)
         {
@@ -279,7 +279,7 @@ internal static class ConnectionStringParser
                 "with the scheme and port given by 'adbc.snowflake.sql.uri.protocol' and '.port'.");
         }
 
-        if (GetOptionalParameter(parameters, "adbc.snowflake.sql.region") is { } region)
+        if (GetOptionalParameter(parameters, SnowflakeParameters.Region) is { } region)
         {
             if (!IdentifierPattern.IsMatch(region))
             {
@@ -291,7 +291,7 @@ internal static class ConnectionStringParser
             network.Region = region;
         }
 
-        if (GetOptionalInt(parameters, "adbc.snowflake.sql.uri.port") is { } port)
+        if (GetOptionalInt(parameters, SnowflakeParameters.Port) is { } port)
         {
             if (port < MinPort || port > MaxPort)
             {
@@ -303,7 +303,7 @@ internal static class ConnectionStringParser
             network.Port = port;
         }
 
-        if (GetOptionalParameter(parameters, "adbc.snowflake.sql.uri.protocol") is { } protocol)
+        if (GetOptionalParameter(parameters, SnowflakeParameters.Protocol) is { } protocol)
         {
             if (!protocol.Equals("https", StringComparison.OrdinalIgnoreCase) &&
                 !protocol.Equals("http", StringComparison.OrdinalIgnoreCase))
@@ -316,10 +316,10 @@ internal static class ConnectionStringParser
             network.Protocol = protocol.ToLowerInvariant();
         }
 
-        if (GetOptionalBool(parameters, "adbc.snowflake.sql.client_option.no_proxy") is { } noProxy)
+        if (GetOptionalBool(parameters, SnowflakeParameters.NoProxy) is { } noProxy)
             network.NoProxy = noProxy;
 
-        if (GetOptionalBool(parameters, "adbc.snowflake.sql.client_option.tls_skip_verify") is { } tlsSkipVerify)
+        if (GetOptionalBool(parameters, SnowflakeParameters.TlsSkipVerify) is { } tlsSkipVerify)
             network.TlsSkipVerify = tlsSkipVerify;
 
         return network;

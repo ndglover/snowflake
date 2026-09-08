@@ -170,7 +170,9 @@ pool-maintenance errors — surface at Warning.
 ## Connection options
 
 Keys follow the [ADBC Snowflake driver reference](https://arrow.apache.org/adbc/current/driver/snowflake.html)
-where an official key exists; pool keys are this driver's own (`adbc.snowflake.pool.*`).
+where an official key exists; pool keys are this driver's own (`adbc.snowflake.pool.*`). Every key
+below is also a constant on `SnowflakeParameters`, so callers can reference them instead of typing
+the strings.
 
 | Key | Meaning | Default |
 |-----|---------|---------|

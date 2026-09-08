@@ -38,6 +38,9 @@ internal class SnowflakeLoginClient
     internal const string AuthenticatorEndpoint = "/session/authenticator-request";
     const string SessionEndpoint = "/session";
 
+    /// <summary>Snowflake's GS code for a login rejected on privileges rather than credentials.</summary>
+    const string InsufficientPrivilegesCode = "390144";
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SnowflakeLoginClient"/> class.
     /// </summary>
@@ -85,18 +88,25 @@ internal class SnowflakeLoginClient
 
             var responseContent = await response.Content.ReadFromJsonAsync<LoginResponse>(cancellationToken).ConfigureAwait(false);
 
-            if (responseContent?.Data == null)
-                throw new AdbcException("Invalid response from Snowflake authentication service.");
+            if (responseContent == null)
+                throw new AdbcException(
+                    "Invalid response from Snowflake authentication service.", AdbcStatusCode.InvalidData);
 
             if (!responseContent.Success)
             {
                 var errorMessage = responseContent.Message ?? "Authentication failed.";
-                throw new AdbcException($"Snowflake authentication failed: {errorMessage}");
+                throw new AdbcException(
+                    $"Snowflake authentication failed: {errorMessage}", StatusForLoginCode(responseContent.Code));
             }
+
+            if (responseContent.Data == null)
+                throw new AdbcException(
+                    "Invalid response from Snowflake authentication service.", AdbcStatusCode.InvalidData);
 
             return new AuthenticationToken
             {
-                SessionToken = responseContent.Data.Token ?? throw new AdbcException("No token received from Snowflake."),
+                SessionToken = responseContent.Data.Token
+                    ?? throw new AdbcException("No token received from Snowflake.", AdbcStatusCode.InvalidData),
                 SessionId = responseContent.Data.SessionId?.ToString(),
                 MasterToken = responseContent.Data.MasterToken,
                 ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(responseContent.Data.ValidityInSeconds),
@@ -105,13 +115,27 @@ internal class SnowflakeLoginClient
         }
         catch (HttpRequestException ex)
         {
-            throw new AdbcException($"Failed to authenticate with Snowflake: {ex.Message}", ex);
+            // The request never completed, so the credentials themselves were never judged.
+            throw new AdbcException(
+                $"Failed to authenticate with Snowflake: {ex.Message}", AdbcStatusCode.IOError, ex);
         }
         catch (JsonException ex)
         {
-            throw new AdbcException($"Failed to parse Snowflake authentication response: {ex.Message}", ex);
+            throw new AdbcException(
+                $"Failed to parse Snowflake authentication response: {ex.Message}", AdbcStatusCode.InvalidData, ex);
         }
     }
+
+    /// <summary>
+    /// Snowflake reports a rejected login with its own error code. Insufficient privileges is an
+    /// authorization failure the caller cannot fix by re-entering credentials, so it is reported
+    /// separately from a plain bad-credentials rejection.
+    /// </summary>
+    private static AdbcStatusCode StatusForLoginCode(string? code) => code switch
+    {
+        InsufficientPrivilegesCode => AdbcStatusCode.Unauthorized,
+        _ => AdbcStatusCode.Unauthenticated
+    };
 
     /// <summary>
     /// Best-effort close of a Snowflake session (<c>POST /session?delete=true</c>) so it is not

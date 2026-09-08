@@ -136,8 +136,19 @@ internal class QueryExecutor : IQueryExecutor
         }
     }
 
-    private static QueryResult CreateFailedResponseResult(ApiResponse<SnowflakeQueryResponse> response) =>
-        QueryResult.Failed(response.Code ?? "UNKNOWN", response.Message ?? "Query execution failed.");
+    private static QueryResult CreateFailedResponseResult(ApiResponse<SnowflakeQueryResponse> response)
+    {
+        string code = response.Code ?? "UNKNOWN";
+        string message = response.Message ?? "Query execution failed.";
+
+        // An unrecoverable session is an authentication failure the caller must act on by
+        // reconnecting, so it carries that status rather than being reported as an unknown error.
+        Exception? cause = IsSessionFatal(response)
+            ? new AdbcException($"[{code}] {message}", AdbcStatusCode.Unauthenticated)
+            : null;
+
+        return QueryResult.Failed(code, message, cause);
+    }
 
     /// <inheritdoc/>
     public async Task<PreparedStatement> DescribeAsync(
@@ -154,7 +165,8 @@ internal class QueryExecutor : IQueryExecutor
         var response = await PostQueryWithRenewalAsync(request, describeOnly: true, request.AuthToken, cancellationToken).ConfigureAwait(false);
 
         if (!response.Success || response.Data == null)
-            throw new AdbcException($"Failed to describe statement: {response.Message ?? "Unknown error"}");
+            throw new AdbcException(
+                $"Failed to describe statement: {response.Message ?? "Unknown error"}", AdbcStatusCode.InvalidArgument);
 
         return new PreparedStatement
         {
@@ -268,7 +280,8 @@ internal class QueryExecutor : IQueryExecutor
         {
             string? resultUrl = response.Data?.GetResultUrl;
             if (string.IsNullOrEmpty(resultUrl))
-                throw new AdbcException("Query is in progress but the response carried no result URL to poll.");
+                throw new AdbcException(
+                "Query is in progress but the response carried no result URL to poll.", AdbcStatusCode.InvalidData);
 
             _logger.LogDebug("Query in progress (code {Code}); polling {ResultUrl}.", response.Code, resultUrl);
 
@@ -340,7 +353,8 @@ internal class QueryExecutor : IQueryExecutor
         }
 
         if (!response.Success)
-            throw new AdbcException($"Snowflake heartbeat failed (code {response.Code ?? "unknown"}).");
+            throw new AdbcException(
+                $"Snowflake heartbeat failed (code {response.Code ?? "unknown"}).", AdbcStatusCode.IOError);
     }
 
     /// <inheritdoc/>
@@ -360,7 +374,8 @@ internal class QueryExecutor : IQueryExecutor
     private async Task RenewSessionCoreAsync(AuthenticationToken authToken, string? renewIfSessionTokenIs, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(authToken.MasterToken))
-            throw new AdbcException("Cannot renew the Snowflake session: no master token is available.");
+            throw new AdbcException(
+                "Cannot renew the Snowflake session: no master token is available.", AdbcStatusCode.Unauthenticated);
 
         await _renewLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -384,7 +399,9 @@ internal class QueryExecutor : IQueryExecutor
                 // The server rejected the renewal, so the session cannot authenticate any further
                 // requests — flag the pooled connection so it is discarded rather than reused.
                 _onConnectionFault();
-                throw new AdbcException($"Failed to renew the Snowflake session token (code {response.Code ?? "unknown"}).");
+                throw new AdbcException(
+                    $"Failed to renew the Snowflake session token (code {response.Code ?? "unknown"}).",
+                    AdbcStatusCode.Unauthenticated);
             }
 
             authToken.SessionToken = response.Data.SessionToken;
@@ -421,7 +438,8 @@ internal class QueryExecutor : IQueryExecutor
         // A successful abort returns success; if the query already finished there is simply nothing
         // to cancel. Surface other failures so a genuinely broken abort isn't silently swallowed.
         if (!response.Success)
-            throw new AdbcException($"Failed to cancel the Snowflake query (code {response.Code ?? "unknown"}).");
+            throw new AdbcException(
+                $"Failed to cancel the Snowflake query (code {response.Code ?? "unknown"}).", AdbcStatusCode.IOError);
     }
 
 }

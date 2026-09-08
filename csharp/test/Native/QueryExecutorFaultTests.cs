@@ -163,6 +163,23 @@ public class QueryExecutorFaultTests
         Assert.Equal(1, _faultCount);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("master-token-123")]
+    public async Task ExecuteQueryAsync_SessionCannotBeRecovered_ReportsUnauthenticated(string? masterToken)
+    {
+        // A session that cannot be renewed is an authentication failure, not an unknown one: the
+        // caller has to re-authenticate, and can only tell from the status code.
+        SetupQueryResponses(new ApiResponse<SnowflakeQueryResponse> { Success = false, Code = "390112" });
+        SetupRenewalResponse(new ApiResponse<SnowflakeRenewSessionData> { Success = false, Code = "390114" });
+
+        Services.Query.QueryResult result = await _sut.ExecuteQueryAsync(Request(CreateToken(masterToken)));
+
+        var error = Assert.Single(result.Errors);
+        var exception = Assert.IsType<AdbcException>(error.Exception);
+        Assert.Equal(AdbcStatusCode.Unauthenticated, exception.Status);
+    }
+
     [Fact]
     public async Task ExecuteQueryAsync_RenewalRejected_FaultsConnection()
     {

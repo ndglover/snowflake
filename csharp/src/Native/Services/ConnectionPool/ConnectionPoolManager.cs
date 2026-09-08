@@ -131,7 +131,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         if (!entered)
             throw new AdbcException(
                 $"Timed out after {config.PoolConfig.AcquireTimeout.TotalSeconds:0}s waiting for an available " +
-                $"connection; the pool is at capacity (max {config.PoolConfig.MaxPoolSize}).");
+                $"connection; the pool is at capacity (max {config.PoolConfig.MaxPoolSize}).",
+                AdbcStatusCode.Timeout);
     }
 
     // Takes the evaluation instant as a parameter (rather than reading _timeProvider itself) so the
@@ -406,7 +407,8 @@ internal class ConnectionPoolManager : IConnectionPoolManager
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new AdbcException($"Login timed out after {loginTimeout.TotalSeconds:0}s.");
+            throw new AdbcException(
+                $"Login timed out after {loginTimeout.TotalSeconds:0}s.", AdbcStatusCode.Timeout);
         }
 
         return new PooledConnection(

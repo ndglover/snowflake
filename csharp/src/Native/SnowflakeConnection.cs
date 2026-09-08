@@ -75,7 +75,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         var pooledConnection = await connectionPool.AcquireConnectionAsync(config, cancellationToken).ConfigureAwait(false);
         if (pooledConnection is null)
         {
-            throw new AdbcException("Failed to acquire pooled connection.");
+            throw new AdbcException("Failed to acquire pooled connection.", AdbcStatusCode.IOError);
         }
         log.LogInformation("Acquired pooled connection {ConnectionId}", pooledConnection.ConnectionId);
 
@@ -98,7 +98,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         return new SnowflakeStatement(_config, _pooledConnection, _queryExecutor);
     }
@@ -117,7 +117,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         return _queryExecutor.RenewSessionAsync(_pooledConnection.AuthToken, cancellationToken);
     }
@@ -130,7 +130,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ThrowIfDisposed();
 
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         return _queryExecutor.HeartbeatAsync(_pooledConnection.AuthToken, cancellationToken);
     }
@@ -172,7 +172,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
 
         if (_queryExecutor == null || _pooledConnection == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         var parts = new List<string>(3);
         if (!string.IsNullOrEmpty(catalog))
@@ -196,7 +196,8 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         PreparedStatement prepared = _queryExecutor.DescribeAsync(request).GetAwaiter().GetResult();
 
         return prepared.ResultSchema
-            ?? throw new AdbcException($"Unable to determine schema for table '{tableName}'.");
+            ?? throw new AdbcException(
+                $"Unable to determine schema for table '{tableName}'.", AdbcStatusCode.NotFound);
     }
 
     /// <summary>
@@ -375,7 +376,8 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     {
         if (_autocommit)
             throw new AdbcException(
-                $"No transaction is in progress: autocommit is enabled. Disable {AdbcOptions.Connection.Autocommit} first.");
+                $"No transaction is in progress: autocommit is enabled. Disable {AdbcOptions.Connection.Autocommit} first.",
+                AdbcStatusCode.InvalidState);
     }
 
     /// <summary>
@@ -386,7 +388,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
     private void ExecuteSessionStatement(string sql)
     {
         if (_pooledConnection == null || _queryExecutor == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         var request = new QueryRequest
         {
@@ -401,7 +403,7 @@ public sealed partial class SnowflakeConnection : AdbcConnection
         if (result.Status != QueryStatus.Success)
         {
             string message = result.Errors.Count > 0 ? result.Errors[0].Message : "Unknown error";
-            throw new AdbcException($"'{sql}' failed: {message}");
+            throw new AdbcException($"'{sql}' failed: {message}", AdbcStatusCode.UnknownError);
         }
     }
 

@@ -148,7 +148,7 @@ public sealed class SnowflakeStatement : AdbcStatement
             var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
 
             if (result.Status == QueryStatus.Cancelled)
-                throw new AdbcException("Query was cancelled.");
+                throw new AdbcException("Query was cancelled.", AdbcStatusCode.Cancelled);
 
             if (result.Status != QueryStatus.Success)
                 throw ToAdbcException("Query failed", result);
@@ -163,7 +163,7 @@ public sealed class SnowflakeStatement : AdbcStatement
         }
         catch (Exception ex)
         {
-            throw new AdbcException($"Query execution failed: {ex.Message}", ex);
+            throw new AdbcException($"Query execution failed: {ex.Message}", StatusOf(ex), ex);
         }
     }
 
@@ -217,7 +217,7 @@ public sealed class SnowflakeStatement : AdbcStatement
             var result = await _queryExecutor.ExecuteQueryAsync(request).ConfigureAwait(false);
 
             if (result.Status == QueryStatus.Cancelled)
-                throw new AdbcException("Update was cancelled.");
+                throw new AdbcException("Update was cancelled.", AdbcStatusCode.Cancelled);
 
             if (result.Status != QueryStatus.Success)
                 throw ToAdbcException("Update failed", result);
@@ -238,7 +238,7 @@ public sealed class SnowflakeStatement : AdbcStatement
         }
         catch (Exception ex)
         {
-            throw new AdbcException($"Update execution failed: {ex.Message}", ex);
+            throw new AdbcException($"Update execution failed: {ex.Message}", StatusOf(ex), ex);
         }
     }
 
@@ -274,6 +274,13 @@ public sealed class SnowflakeStatement : AdbcStatement
     }
 
     /// <summary>
+    /// Keeps the status an inner AdbcException already carried, so wrapping a failure at the
+    /// statement boundary does not flatten an authentication or timeout error into UnknownError.
+    /// </summary>
+    private static AdbcStatusCode StatusOf(Exception ex) =>
+        ex is AdbcException adbc ? adbc.Status : AdbcStatusCode.UnknownError;
+
+    /// <summary>
     /// Builds the failure exception from a failed result, carrying the originating exception as the
     /// inner exception (when there was one) so the full stack survives instead of just its message.
     /// </summary>
@@ -284,8 +291,8 @@ public sealed class SnowflakeStatement : AdbcStatement
             : "Unknown error";
         var cause = result.Errors.Find(e => e.Exception != null)?.Exception;
         return cause is null
-            ? new AdbcException($"{prefix}: {errorMessages}")
-            : new AdbcException($"{prefix}: {errorMessages}", cause);
+            ? new AdbcException($"{prefix}: {errorMessages}", AdbcStatusCode.UnknownError)
+            : new AdbcException($"{prefix}: {errorMessages}", StatusOf(cause), cause);
     }
 
     /// <summary>

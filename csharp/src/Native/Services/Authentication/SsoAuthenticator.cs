@@ -168,16 +168,21 @@ internal class SsoAuthenticator : ISsoAuthenticator
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
             if (responseContent?.Data?.SsoUrl == null)
-                throw new AdbcException($"Failed to retrieve SSO URL from Snowflake. Response: {responseBody}");
+                throw new AdbcException(
+                    $"Failed to retrieve SSO URL from Snowflake. Response: {responseBody}",
+                    AdbcStatusCode.Unauthenticated);
 
             if (responseContent.Data.ProofKey == null)
-                throw new AdbcException($"Failed to retrieve proof key from Snowflake. Response: {responseBody}");
+                throw new AdbcException(
+                    $"Failed to retrieve proof key from Snowflake. Response: {responseBody}",
+                    AdbcStatusCode.Unauthenticated);
 
             return (responseContent.Data.SsoUrl, responseContent.Data.ProofKey);
         }
         catch (HttpRequestException ex)
         {
-            throw new AdbcException($"Failed to get SSO URL from Snowflake: {ex.Message}", ex);
+            throw new AdbcException(
+                $"Failed to get SSO URL from Snowflake: {ex.Message}", AdbcStatusCode.IOError, ex);
         }
     }
 
@@ -210,7 +215,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
             {
                 await SendResponseAsync(context, ErrorHtml).ConfigureAwait(false);
                 throw new AdbcException("No authentication token received from Snowflake SSO. " +
-                    $"Received query: {query}");
+                    $"Received query: {query}", AdbcStatusCode.Unauthenticated);
             }
 
             await SendResponseAsync(context, SuccessHtml).ConfigureAwait(false);
@@ -220,7 +225,8 @@ internal class SsoAuthenticator : ISsoAuthenticator
         {
             throw new AdbcException(
                 $"Browser authentication timed out after {DefaultBrowserTimeout.TotalSeconds} seconds. " +
-                "Please ensure your browser completed the SSO login.");
+                "Please ensure your browser completed the SSO login.",
+                AdbcStatusCode.Timeout);
         }
     }
 
@@ -281,7 +287,7 @@ internal class SsoAuthenticator : ISsoAuthenticator
         {
             throw new AdbcException(
                 $"Failed to open browser for SSO authentication. " +
-                $"Please manually open: {url}", ex);
+                $"Please manually open: {url}", AdbcStatusCode.InternalError, ex);
         }
     }
 }

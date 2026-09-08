@@ -355,7 +355,7 @@ public sealed partial class SnowflakeConnection
     private List<Dictionary<string, string?>> RunMetadataQuery(string sql, IReadOnlyList<string?>? bindValues = null)
     {
         if (_queryExecutor == null || _pooledConnection == null)
-            throw new AdbcException("Connection is not properly initialized.");
+            throw new AdbcException("Connection is not properly initialized.", AdbcStatusCode.InvalidState);
 
         var request = new QueryRequest
         {
@@ -382,7 +382,7 @@ public sealed partial class SnowflakeConnection
         if (result.Status == QueryStatus.Failed)
         {
             string message = result.Errors.Count > 0 ? result.Errors[0].Message : "Unknown error";
-            throw new AdbcException($"Metadata query failed: {message}");
+            throw new AdbcException($"Metadata query failed: {message}", AdbcStatusCode.UnknownError);
         }
 
         var rows = new List<Dictionary<string, string?>>();

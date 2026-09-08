@@ -89,7 +89,8 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
             return authConfig.PrivateKey!;
 
         if (!File.Exists(authConfig.PrivateKeyPath))
-            throw new AdbcException($"Private key file not found: {authConfig.PrivateKeyPath}");
+            throw new AdbcException(
+                $"Private key file not found: {authConfig.PrivateKeyPath}", AdbcStatusCode.InvalidArgument);
 
         return await File.ReadAllTextAsync(authConfig.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
     }
@@ -149,12 +150,14 @@ internal class KeyPairAuthenticator : IKeyPairAuthenticator
         }
         catch (CryptographicException ex)
         {
-            throw new AdbcException($"Failed to process private key: {ex.Message}", ex);
+            throw new AdbcException(
+                $"Failed to process private key: {ex.Message}", AdbcStatusCode.InvalidArgument, ex);
         }
         catch (ArgumentException ex)
         {
             // ImportFromPem reports text with no recognizable PEM block as ArgumentException.
-            throw new AdbcException($"Failed to process private key: {ex.Message}", ex);
+            throw new AdbcException(
+                $"Failed to process private key: {ex.Message}", AdbcStatusCode.InvalidArgument, ex);
         }
     }
 

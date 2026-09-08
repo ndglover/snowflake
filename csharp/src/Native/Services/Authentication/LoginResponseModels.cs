@@ -23,6 +23,13 @@ internal class LoginResponse
 {
     public bool Success { get; set; }
     public string? Message { get; set; }
+
+    /// <summary>
+    /// Snowflake's own error code for a failed login, such as 390100 for bad credentials. Used to
+    /// tell an authentication failure from an authorization one; null when the login succeeded.
+    /// </summary>
+    public string? Code { get; set; }
+
     public LoginData? Data { get; set; }
 }
 

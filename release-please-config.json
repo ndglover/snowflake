@@ -8,7 +8,7 @@
       "extra-files": [
         {
           "type": "xml",
-          "path": "../../Directory.Build.props",
+          "path": "AdbcDrivers.Snowflake.csproj",
           "xpath": "//VersionPrefix"
         }
       ]

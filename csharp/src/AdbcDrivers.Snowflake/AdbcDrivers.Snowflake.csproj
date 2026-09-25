@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <!-- Owns its own version so release-please's extra-files updater can target a file
+         inside this package's own directory (it refuses to traverse into a parent). -->
+    <VersionPrefix>0.24.0</VersionPrefix>
     <!-- TEMPORARY: testing the publish pipeline under a name that won't collide with the
          real package or surface in an Adbc search. Revert to AdbcDrivers.Snowflake before
          this is proposed upstream. -->

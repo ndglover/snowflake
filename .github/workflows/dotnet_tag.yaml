@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - main
+      - Workflow # TEMPORARY: dry-running the pipeline without touching main, remove before merging upstream
     paths:
       - 'csharp/src/AdbcDrivers.Snowflake/**'
       - 'csharp/Directory.Build.props'
@@ -41,3 +42,4 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: ${{ github.ref_name }}

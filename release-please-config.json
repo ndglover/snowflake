@@ -6,11 +6,7 @@
       "component": "dotnet",
       "tag-separator": "/",
       "extra-files": [
-        {
-          "type": "xml",
-          "path": "AdbcDrivers.Snowflake.csproj",
-          "xpath": "//VersionPrefix"
-        }
+        "AdbcDrivers.Snowflake.csproj"
       ]
     }
   }

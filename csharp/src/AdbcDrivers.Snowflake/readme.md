@@ -259,7 +259,7 @@ absolutes.
 - **Not implemented**: PUT/GET stage file transfer
 - Semi-structured types (VARIANT/OBJECT/ARRAY) are returned as JSON strings; GEOGRAPHY/GEOMETRY as GeoJSON strings.
 - Very slow consumption of very large results can outlive the chunk URLs' presigned validity.
-- OTEL Tracing to be added
+- OpenTelemetry (OTEL) tracing to be added
 - Additional Auth methods
 
 ## License

@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <!-- TEMPORARY: testing the publish pipeline under a name that won't collide with the
+         real package or surface in an Adbc search. Revert to AdbcDrivers.Snowflake before
+         this is proposed upstream. -->
+    <PackageId>WorkflowTest.Driver</PackageId>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <Description>C# Snowflake driver for Apache Arrow ADBC</Description>
   </PropertyGroup>
@@ -25,6 +29,11 @@
       <Pack>true</Pack>
       <PackagePath>\</PackagePath>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(RepoRoot)NOTICE.txt">
+      <Pack>true</Pack>
+      <PackagePath>\</PackagePath>
+      <Visible>false</Visible>
     </Content>
   </ItemGroup>
 </Project>

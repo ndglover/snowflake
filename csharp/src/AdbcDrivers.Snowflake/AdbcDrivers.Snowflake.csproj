@@ -3,7 +3,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <!-- Owns its own version so release-please's extra-files updater can target a file
          inside this package's own directory (it refuses to traverse into a parent). -->
-    <VersionPrefix>0.24.0</VersionPrefix>
+    <VersionPrefix>1.0.0</VersionPrefix>
     <!-- TEMPORARY: testing the publish pipeline under a name that won't collide with the
          real package or surface in an Adbc search. Revert to AdbcDrivers.Snowflake before
          this is proposed upstream. -->
@@ -15,16 +15,16 @@
   <ItemGroup>
     <!-- Abstractions only: the driver consumes ILogger/ILoggerFactory but never builds a provider.
          JWT (key-pair auth) is hand-rolled over the in-box System.Security.Cryptography RSA. -->
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.1"/>
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\arrow-adbc\csharp\src\Apache.Arrow.Adbc\Apache.Arrow.Adbc.csproj" />
+    <ProjectReference Include="..\..\arrow-adbc\csharp\src\Apache.Arrow.Adbc\Apache.Arrow.Adbc.csproj"/>
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="AdbcDrivers.Snowflake.Tests" />
-    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <InternalsVisibleTo Include="AdbcDrivers.Snowflake.Tests"/>
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2"/>
   </ItemGroup>
 
   <ItemGroup>

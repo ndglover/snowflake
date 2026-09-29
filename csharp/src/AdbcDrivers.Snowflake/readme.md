@@ -116,8 +116,8 @@ the connector-net-style spellings in parentheses are accepted as aliases:
 | `auth_pat` (`programmatic_access_token`, `pat`) | Programmatic access token (requires the user to be under a network policy) | `…client_option.auth_token` |
 | `auth_ext_browser` (`externalbrowser`) | Browser-based SSO | — |
 
-`auth_okta`, `auth_mfa`, and `auth_wif` are recognized as canonical ADBC values but not yet
-supported.
+`auth_okta`, `auth_mfa`, and `auth_wif` (Workload Identity Federation) are recognized as canonical
+ADBC values but not yet supported.
 
 ### ADO.NET client
 

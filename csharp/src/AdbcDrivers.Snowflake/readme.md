@@ -260,7 +260,7 @@ absolutes.
 - Semi-structured types (VARIANT/OBJECT/ARRAY) are returned as JSON strings; GEOGRAPHY/GEOMETRY as GeoJSON strings.
 - Very slow consumption of very large results can outlive the chunk URLs' presigned validity.
 - OpenTelemetry (OTEL) tracing to be added
-- Additional Auth methods
+- Additional auth methods
 
 ## License
 

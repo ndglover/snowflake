@@ -26,6 +26,7 @@ on:
       - 'csharp/src/AdbcDrivers.Snowflake/**'
       - 'csharp/Directory.Build.props'
       - 'release-please-config.json'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
